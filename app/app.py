@@ -96,14 +96,7 @@ DISEASE_ALIASES = {
 # ====================================================================
 # 2. DICTIONARY POST-PROCESSING ALIGNMENT LAYER (UPDATED FUZZ.WRATIO)
 # ====================================================================
-MEDICAL_DICTIONARY = [
-    "Rx", "Stable", "Tablet", "Capsule", "Amoxicillin", "Paracetamol",
-    "Azithromycin", "Metformin", "Ibuprofen", "Anacin", "Flamex",
-    "Syrup", "Injection", "Pantoprazole", "Vitamin-C", "Cetirizine",
-    "FeSO4", "Ascorbic Acid", "once a day", "twice a day", "Napdos",
-    "Losita", "Rivotril", "Econate", "Kacin", "bengel", "Omep", "Fougest",
-    "RUPIN", "myolax", "Tenocab", "Radifil", "Povital", "Napa", "Voligel", "lactomore", "Don A"
-]
+
 
 MEDICAL_EXPANSION_MAP = {
     "FeSO4": "Ferrous Sulfate",
