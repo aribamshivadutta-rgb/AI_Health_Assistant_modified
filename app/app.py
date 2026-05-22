@@ -285,25 +285,21 @@ class OCRReaderPipeline:
         if os.path.exists(CRNN_WEIGHTS):
             raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
 
-            # 🎯 PARITY TRACE: Capture and display keys
-            model_keys = list(self.text_recognizer.state_dict().keys())
-            saved_keys = list(raw_state_dict.keys())
-
-            st.sidebar.write("### 🔍 Model Layer Key Trace")
-            if saved_keys:
-                st.sidebar.caption(f"File Keys: {saved_keys[0]}...")
-            if model_keys:
-                st.sidebar.caption(f"Code Keys: {model_keys[0]}...")
-
+            # 🎯 DYNAMIC STATE_DICT DICTIONARY INTERCEPTOR LAYER
+            # Automatically extracts sub-module anchors regardless of training module compilation wrapper prefixes
             sanitized_state_dict = {}
             for k, v in raw_state_dict.items():
-                # Stripping common training wrappers
-                new_key = k.replace("module.", "").replace("text_recognizer.", "").replace("model.", "")
+                new_key = k
+                if new_key.startswith("module."):
+                    new_key = new_key.replace("module.", "")
+                if new_key.startswith("model."):
+                    new_key = new_key.replace("model.", "")
+                if new_key.startswith("text_recognizer."):
+                    new_key = new_key.replace("text_recognizer.", "")
                 sanitized_state_dict[new_key] = v
 
-            # Use strict loading to force immediate crash if keys don't match 1:1
+            # Force strict evaluation profile to guarantee that trained cell vectors match internal layouts
             self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
-            st.sidebar.success("✅ Weights Parity Verified")
         self.text_recognizer.eval()
 
     def _split_lines_by_projection(self, block_crop):
@@ -336,7 +332,7 @@ class OCRReaderPipeline:
             line_crops.append(block_crop[start_y:, :])
         return line_crops if len(line_crops) > 0 else [block_crop]
 
-    def process_image(self, image_input, true_label=None, preset_mode="Raw Intensity Map ([0, 1])"):
+    def process_image(self, image_input, true_label=None, preset_mode="High-Contrast Document (Zero-Centered)"):
         raw_img = None
         if isinstance(image_input, str):
             raw_img = cv2.imread(image_input, cv2.IMREAD_GRAYSCALE)
@@ -378,6 +374,7 @@ class OCRReaderPipeline:
         mask = np.zeros((512, 512), dtype=np.uint8)
         if self.detector is not None and is_full_prescription:
             with torch.no_grad():
+                # Raw activation profile lock mapping identical offline matrix threshold steps
                 mask_output = self.detector(img_tensor)
                 raw_mask_np = mask_output.squeeze().detach().cpu().numpy()
                 mask = (raw_mask_np > 0.5).astype(np.uint8) * 255
@@ -389,6 +386,7 @@ class OCRReaderPipeline:
         if self.text_recognizer is not None:
             extracted_line_crops = []
 
+            # Clean pristine image segmentation handling sequence
             if self.detector is not None and np.sum(mask > 0) > 1000 and is_full_prescription:
                 resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
                 horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
@@ -486,6 +484,7 @@ class OCRReaderPipeline:
                     batch_size = crnn_tensor.size(0)
                     num_directions = 2
 
+                    # Explicit 32-bit floating point matrix declarations matching standard training constraints
                     h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
                                      self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
                     c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
@@ -494,9 +493,6 @@ class OCRReaderPipeline:
                     logits = self.text_recognizer(crnn_tensor, (h0, c0))
                     probs = torch.exp(logits).squeeze(0)
                     best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
-
-                    # 🎯 PARITY TRACE: Capture raw path for comparison
-                    raw_indices = best_path.tolist()
 
                     path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
                     line_confidence = float(np.mean(path_probs)) * 100
@@ -510,11 +506,9 @@ class OCRReaderPipeline:
                             st.session_state.line_diagnostics.append({
                                 "text": decoded_line,
                                 "confidence": f"{line_confidence:.2f}%",
-                                "raw_tokens": raw_indices[:15],
+                                "raw_tokens": list(best_path[:12]),
                                 "active_indices": active_tokens
                             })
-                            # 🚀 DEBUG LOG: Print to console to compare server vs local indices
-                            print(f"DEBUG_PARITY: Decoded='{decoded_line}' | Indices={raw_indices[:15]}")
 
             ocr_text_output = "\n".join(final_text_lines) if final_text_lines else "No readable text extracted."
         else:
@@ -673,10 +667,9 @@ def main():
             st.divider()
             st.subheader("Clinical Data Upload")
 
-            # 🎯 FIXED: DEFAULT SET TO RAW INTENSITY TO AVOID FLOAT DRIFT
             selected_preset = st.selectbox(
                 "CRNN Tensor Matrix Preset",
-                ["Raw Intensity Map ([0, 1])", "High-Contrast Document (Zero-Centered)"]
+                ["High-Contrast Document (Zero-Centered)", "Raw Intensity Map ([0, 1])"]
             )
 
             uploaded_file = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
