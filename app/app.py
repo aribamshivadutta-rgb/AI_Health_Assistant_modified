@@ -264,7 +264,6 @@ class OCRReaderPipeline:
         self.text_recognizer = None
         self.encoder = MedicalLabelEncoder()
 
-        # 🎯 PARITY PATH TRACKER: Fixed directory anchors for vocab dictionary lookups online
         label_xlsx = os.path.join(MED_CRNN_DIR, "Train_Label.xlsx")
         label_csv = os.path.join(MED_CRNN_DIR, "Train_Label.csv")
         if os.path.exists(label_xlsx):
@@ -285,9 +284,21 @@ class OCRReaderPipeline:
         self.text_recognizer = MedicalCRNN(self.encoder.vocab_size).to(self.device)
         if os.path.exists(CRNN_WEIGHTS):
             raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
-            sanitized_state_dict = {k.replace("module.", ""): v for k, v in raw_state_dict.items()}
 
-            # 🎯 STRICT ENFORCEMENT: Remove strict=False to ensure text recognition keys match your trained local configuration exactly
+            # 🎯 DYNAMIC STATE_DICT DICTIONARY INTERCEPTOR LAYER
+            # Automatically extracts sub-module anchors regardless of training module compilation wrapper prefixes
+            sanitized_state_dict = {}
+            for k, v in raw_state_dict.items():
+                new_key = k
+                if new_key.startswith("module."):
+                    new_key = new_key.replace("module.", "")
+                if new_key.startswith("model."):
+                    new_key = new_key.replace("model.", "")
+                if new_key.startswith("text_recognizer."):
+                    new_key = new_key.replace("text_recognizer.", "")
+                sanitized_state_dict[new_key] = v
+
+            # Force strict evaluation profile to guarantee that trained cell vectors match internal layouts
             self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
         self.text_recognizer.eval()
 
@@ -363,7 +374,7 @@ class OCRReaderPipeline:
         mask = np.zeros((512, 512), dtype=np.uint8)
         if self.detector is not None and is_full_prescription:
             with torch.no_grad():
-                # 🎯 PARITY LOCK: Process raw activations directly matching offline engine profile
+                # Raw activation profile lock mapping identical offline matrix threshold steps
                 mask_output = self.detector(img_tensor)
                 raw_mask_np = mask_output.squeeze().detach().cpu().numpy()
                 mask = (raw_mask_np > 0.5).astype(np.uint8) * 255
@@ -473,7 +484,7 @@ class OCRReaderPipeline:
                     batch_size = crnn_tensor.size(0)
                     num_directions = 2
 
-                    # Hard-casted float32 array baselines matching standard inference structures
+                    # Explicit 32-bit floating point matrix declarations matching standard training constraints
                     h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
                                      self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
                     c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
