@@ -387,8 +387,8 @@ class OCRReaderPipeline:
                     _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 else:
                     _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
-                processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+                processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, horizontal_kernel)
 
             if is_full_prescription:
                 line_bounding_boxes = []
@@ -626,6 +626,7 @@ def main():
 
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
+            st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
             with tab_unlock:
                 pin = st.text_input("Enter 6-Digit Key", type="password", key="vault_pin")
@@ -645,7 +646,7 @@ def main():
                     else:
                         st.error("Invalid Email Structure.")
         else:
-            st.success("Professional Access Active")
+            st.success("✅ Professional Access Active")
             if st.button("Logout"):
                 st.session_state.auth = False
                 st.rerun()
@@ -719,7 +720,7 @@ def main():
                             f"File Found? `{os.path.exists(DETECTOR_WEIGHTS)}` | Initialized? `{detector_loaded}`")
                         st.sidebar.divider()
                         st.metric("Inferred Category", "Prescription/Symptom")
-                        st.metric("Router Confidence", "93.90%")
+                        st.sidebar.metric("Router Confidence", "93.90%")
 
                         display_text = st.session_state.get("persistent_extracted_text", "Processing context...")
                         st.text_area("Extracted Context Matrix", display_text)
