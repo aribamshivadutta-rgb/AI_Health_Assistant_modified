@@ -286,7 +286,6 @@ class OCRReaderPipeline:
             raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
 
             # 🎯 DYNAMIC STATE_DICT DICTIONARY INTERCEPTOR LAYER
-            # Automatically extracts sub-module anchors regardless of training module compilation wrapper prefixes
             sanitized_state_dict = {}
             for k, v in raw_state_dict.items():
                 new_key = k
@@ -298,7 +297,6 @@ class OCRReaderPipeline:
                     new_key = new_key.replace("text_recognizer.", "")
                 sanitized_state_dict[new_key] = v
 
-            # Force strict evaluation profile to guarantee that trained cell vectors match internal layouts
             self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
         self.text_recognizer.eval()
 
@@ -366,7 +364,12 @@ class OCRReaderPipeline:
         if aspect_ratio > 2.0 or orig_h < 150:
             is_full_prescription = False
 
-        resized_img = cv2.resize(raw_img, (512, 512))
+        # 🎯 ADVANCED ADAPTIVE CONTRAST PATCH (CLAHE ENHANCEMENT)
+        # Re-injects the digital glasses so the U-Net never goes blind under low illumination parameters
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        equalized_raw_img = clahe.apply(raw_img)
+
+        resized_img = cv2.resize(equalized_raw_img, (512, 512))
         processed_unet_input = cv2.bitwise_not(resized_img) if np.mean(resized_img) > 127 else resized_img.copy()
         img_input = processed_unet_input / 255.0
         img_tensor = torch.from_numpy(img_input).unsqueeze(0).unsqueeze(0).float().to(self.device)
@@ -374,7 +377,6 @@ class OCRReaderPipeline:
         mask = np.zeros((512, 512), dtype=np.uint8)
         if self.detector is not None and is_full_prescription:
             with torch.no_grad():
-                # Raw activation profile lock mapping identical offline matrix threshold steps
                 mask_output = self.detector(img_tensor)
                 raw_mask_np = mask_output.squeeze().detach().cpu().numpy()
                 mask = (raw_mask_np > 0.5).astype(np.uint8) * 255
@@ -386,7 +388,6 @@ class OCRReaderPipeline:
         if self.text_recognizer is not None:
             extracted_line_crops = []
 
-            # Clean pristine image segmentation handling sequence
             if self.detector is not None and np.sum(mask > 0) > 1000 and is_full_prescription:
                 resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
                 horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
@@ -394,10 +395,10 @@ class OCRReaderPipeline:
                 mask_status_log = f"🟢 U-Net Mask Active! Found {np.sum(mask > 0)} target pixels."
             else:
                 mask_status_log = f"🔴 Adaptive Pass Active"
-                if np.mean(raw_img) > 127:
-                    _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                if np.mean(equalized_raw_img) > 127:
+                    _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 else:
-                    _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
                 processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, horizontal_kernel)
 
@@ -424,7 +425,7 @@ class OCRReaderPipeline:
                 for (x, y, cw, ch) in line_bounding_boxes:
                     pad_y1, pad_y2 = max(0, y - 4), min(orig_h, y + ch + 4)
                     pad_x1, pad_x2 = max(0, x - 4), min(orig_w, x + cw + 4)
-                    block_crop = raw_img[pad_y1:pad_y2, pad_x1:pad_x2]
+                    block_crop = equalized_raw_img[pad_y1:pad_y2, pad_x1:pad_x2]
                     if block_crop.size == 0:
                         continue
                     tokenized_lines = self._split_lines_by_projection(block_crop)
@@ -435,7 +436,7 @@ class OCRReaderPipeline:
                     cv2.rectangle(preview_canvas, (bx, by), (bx + bw, by + bh), (255), thickness=-1)
                 ui_mask_preview = cv2.resize(preview_canvas, (512, 512)).astype(np.uint8)
             else:
-                extracted_line_crops.append(raw_img.copy())
+                extracted_line_crops.append(equalized_raw_img.copy())
                 ui_mask_preview = np.zeros((512, 512), dtype=np.uint8)
 
             USE_ZERO_CENTERED_SCALE = "Zero-Centered" in preset_mode
@@ -484,7 +485,6 @@ class OCRReaderPipeline:
                     batch_size = crnn_tensor.size(0)
                     num_directions = 2
 
-                    # Explicit 32-bit floating point matrix declarations matching standard training constraints
                     h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
                                      self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
                     c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
@@ -629,7 +629,6 @@ def main():
         st.header("🔐 Secure Vault")
         st.caption(f"Hardware ID: `{v_id}`")
 
-        # 📡 DYNAMIC REAL-TIME PATH CHECKER
         st.divider()
         st.subheader("📡 Server Path Diagnostics")
         st.text(f"Is Online Host? {IS_ONLINE_DEPLOYMENT}")
@@ -638,7 +637,6 @@ def main():
         st.divider()
 
         if not st.session_state.auth:
-            st.warning("Locked Mode: Chat only.")
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
             with tab_unlock:
