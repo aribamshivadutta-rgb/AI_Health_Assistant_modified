@@ -36,9 +36,7 @@ except ImportError:
 
 # Clean, robust baseline script directory detection
 CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = CURRENT_SCRIPT_DIR  # Root baseline path anchoring
-
-sys.path.append(PROJECT_ROOT)
+sys.path.append(CURRENT_SCRIPT_DIR)
 
 try:
     from scripts.medical_detector_cnn import MedicalDetectorCNN
@@ -49,7 +47,7 @@ except ImportError:
         MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. DYNAMIC CONFIGURATION ROUTING (LOCAL WINDOWS VS ONLINE SERVER)
+# 1. PERMANENT ABSOLUTE CONFIGURATION ROUTING (FIXES ONLINE SERVER void)
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
@@ -62,13 +60,14 @@ if not IS_ONLINE_DEPLOYMENT:
     TRAIN_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\train_lgbm.py"
     MED_CRNN_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\MedicalCRNN_clean"
 else:
-    MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
-    DATA_DIR = os.path.join(PROJECT_ROOT, "data", "clean", "chat_bot_clean")
-    RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw")
-    TEMP_DIR = os.path.join(PROJECT_ROOT, "data", "temp")
-    PREPROCESS_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "chat_bot_preprocessing.py")
-    TRAIN_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "train_lgbm.py")
-    MED_CRNN_DIR = os.path.join(PROJECT_ROOT, "data", "clean", "MedicalCRNN_clean")
+    # 🎯 ONLINE LINUX CLOUD FIX: Absolute anchor targeting next to where app.py sits
+    MODEL_DIR = os.path.join(CURRENT_SCRIPT_DIR, "models")
+    DATA_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "clean", "chat_bot_clean")
+    RAW_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "raw")
+    TEMP_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "temp")
+    PREPROCESS_SCRIPT = os.path.join(CURRENT_SCRIPT_DIR, "scripts", "chat_bot_preprocessing.py")
+    TRAIN_SCRIPT = os.path.join(CURRENT_SCRIPT_DIR, "scripts", "train_lgbm.py")
+    MED_CRNN_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "clean", "MedicalCRNN_clean")
 
 MODEL_PATH = os.path.join(MODEL_DIR, "lgbm_model_clean.pkl")
 LE_PATH = os.path.join(DATA_DIR, "label_encoder.pkl")
@@ -198,7 +197,7 @@ def verify_user_cloud(v_id, input_key):
 
 
 # ====================================================================
-# 4. FIXED & FULLY SYNCHRONIZED ARCHITECTURE BLOCK
+# 4. FULLY SYNCHRONIZED ARCHITECTURE BLOCK
 # ====================================================================
 class MedicalLabelEncoder:
     def __init__(self):
@@ -364,7 +363,7 @@ class OCRReaderPipeline:
         if self.text_recognizer is not None:
             extracted_line_crops = []
 
-            # 🎯 STRUCTURAL FIXED GATING FOR SEGMENTATION STABILITY
+            # Robust line processing loop
             if self.detector is not None and np.sum(mask) > 1000 and is_full_prescription:
                 resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
                 horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (45, 4))
@@ -528,7 +527,7 @@ class MedicalAI:
                 if os.path.exists(FULL_DATA_PATH):
                     self.df_full = pd.read_csv(FULL_DATA_PATH)
             except Exception as e:
-                print(f"Soft Initialization Layer Warning: {e}")
+                print(f"Soft Initialization Warning: {e}")
         else:
             self.known_symptoms = ["fever", "cough", "headache", "fatigue", "vomiting"]
             self.known_diseases = ["influenza", "common cold"]
@@ -613,7 +612,7 @@ def main():
         st.divider()
         st.subheader("📡 Server Path Diagnostics")
         st.text(f"Is Online Host? {IS_ONLINE_DEPLOYMENT}")
-        st.text(f"Weights Path Location:\n{DETECTOR_WEIGHTS}")
+        st.text(f"Target Checkpoint Location:\n{DETECTOR_WEIGHTS}")
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
         st.divider()
 
