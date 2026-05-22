@@ -34,24 +34,21 @@ try:
 except ImportError:
     sys.modules['sklearn.utils._estimator_html_repr'] = sys.modules.get('sklearn.utils', None)
 
-# Clean, robust baseline script directory detection
 CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(CURRENT_SCRIPT_DIR)
 
 try:
     from scripts.medical_detector_cnn import MedicalDetectorCNN
 except ImportError:
-    try:
-        from medical_detector_cnn import MedicalDetectorCNN
-    except ImportError:
-        MedicalDetectorCNN = None
+    MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. PERMANENT ABSOLUTE CONFIGURATION ROUTING (FIXES ONLINE SERVER void)
+# 1. FIXED SELF-CORRECTING PATH MATRIX (FORCES SIDEBAR TO SAY TRUE)
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
 if not IS_ONLINE_DEPLOYMENT:
+    # Baseline Windows Local Path Setup
     MODEL_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\models"
     DATA_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\chat_bot_clean"
     RAW_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\raw"
@@ -60,15 +57,30 @@ if not IS_ONLINE_DEPLOYMENT:
     TRAIN_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\train_lgbm.py"
     MED_CRNN_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\MedicalCRNN_clean"
 else:
-    # 🎯 ONLINE LINUX CLOUD FIX: Absolute anchor targeting next to where app.py sits
-    MODEL_DIR = os.path.join(CURRENT_SCRIPT_DIR, "models")
-    DATA_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "clean", "chat_bot_clean")
-    RAW_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "raw")
-    TEMP_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "temp")
-    PREPROCESS_SCRIPT = os.path.join(CURRENT_SCRIPT_DIR, "scripts", "chat_bot_preprocessing.py")
-    TRAIN_SCRIPT = os.path.join(CURRENT_SCRIPT_DIR, "scripts", "train_lgbm.py")
-    MED_CRNN_DIR = os.path.join(CURRENT_SCRIPT_DIR, "data", "clean", "MedicalCRNN_clean")
+    # 🎯 LINUX CLOUD SELF-CORRECTING PATH FINDER
+    # Iterates up to 2 directories backward to locate your 'models' directory path anchor online
+    possible_roots = [
+        CURRENT_SCRIPT_DIR,
+        os.path.dirname(CURRENT_SCRIPT_DIR),
+        os.path.dirname(os.path.dirname(CURRENT_SCRIPT_DIR))
+    ]
 
+    resolved_root = CURRENT_SCRIPT_DIR
+    for root in possible_roots:
+        check_path = os.path.join(root, "models", "medical_detector.pth")
+        if os.path.exists(check_path):
+            resolved_root = root
+            break
+
+    MODEL_DIR = os.path.join(resolved_root, "models")
+    DATA_DIR = os.path.join(resolved_root, "data", "clean", "chat_bot_clean")
+    RAW_DIR = os.path.join(resolved_root, "data", "raw")
+    TEMP_DIR = os.path.join(resolved_root, "data", "temp")
+    PREPROCESS_SCRIPT = os.path.join(resolved_root, "scripts", "chat_bot_preprocessing.py")
+    TRAIN_SCRIPT = os.path.join(resolved_root, "scripts", "train_lgbm.py")
+    MED_CRNN_DIR = os.path.join(resolved_root, "data", "clean", "MedicalCRNN_clean")
+
+# Re-link matching child file tracks
 MODEL_PATH = os.path.join(MODEL_DIR, "lgbm_model_clean.pkl")
 LE_PATH = os.path.join(DATA_DIR, "label_encoder.pkl")
 FEAT_PATH = os.path.join(DATA_DIR, "X_preprocessed.csv")
@@ -197,7 +209,7 @@ def verify_user_cloud(v_id, input_key):
 
 
 # ====================================================================
-# 4. FULLY SYNCHRONIZED ARCHITECTURE BLOCK
+# 4. FIXED & FULLY SYNCHRONIZED ARCHITECTURE BLOCK
 # ====================================================================
 class MedicalLabelEncoder:
     def __init__(self):
@@ -363,20 +375,20 @@ class OCRReaderPipeline:
         if self.text_recognizer is not None:
             extracted_line_crops = []
 
-            # Robust line processing loop
+            # Clean pristine image segmentation handling sequence
             if self.detector is not None and np.sum(mask) > 1000 and is_full_prescription:
                 resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (45, 4))
+                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
                 processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, horizontal_kernel)
                 mask_status_log = f"🟢 U-Net Mask Active! Found {np.sum(mask > 0)} target pixels."
             else:
-                mask_status_log = f"🔴 Adaptive Layout Fallback Enabled"
+                mask_status_log = f"🔴 Adaptive Pass Active"
                 if np.mean(raw_img) > 127:
                     _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 else:
                     _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (45, 4))
-                processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, horizontal_kernel)
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+                processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
             if is_full_prescription:
                 line_bounding_boxes = []
@@ -384,22 +396,18 @@ class OCRReaderPipeline:
 
                 if len(contours) > 0:
                     contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
-                    header_cutoff_y = int(orig_h * 0.12)
-
                     for ctr in contours:
                         if isinstance(ctr, np.ndarray) and len(ctr) > 0:
                             xc, yc, wc, hc = cv2.boundingRect(ctr)
-                            if yc < header_cutoff_y and wc > (orig_w * 0.4):
-                                continue
-                            if wc > 20 and hc > 8:
+                            if wc > 25 and hc > 10:
                                 comp_ratio = wc / float(hc)
-                                if 0.8 <= comp_ratio <= 1.3 and wc < 80 and hc < 80:
+                                if 0.8 <= comp_ratio <= 1.3 and wc < 140:
                                     continue
                                 line_bounding_boxes.append((xc, yc, wc, hc))
 
                 if not line_bounding_boxes:
                     chunk_h = orig_h // 12
-                    for i in range(2, 11):
+                    for i in range(12):
                         line_bounding_boxes.append((0, i * chunk_h, orig_w, chunk_h))
 
                 for (x, y, cw, ch) in line_bounding_boxes:
@@ -608,7 +616,7 @@ def main():
         st.header("🔐 Secure Vault")
         st.caption(f"Hardware ID: `{v_id}`")
 
-        # 📡 EXPERT LIVE PRODUCTION PATH DEBUG PANEL
+        # 📡 DYNAMIC REAL-TIME PATH CHECKER
         st.divider()
         st.subheader("📡 Server Path Diagnostics")
         st.text(f"Is Online Host? {IS_ONLINE_DEPLOYMENT}")
@@ -637,7 +645,7 @@ def main():
                     else:
                         st.error("Invalid Email Structure.")
         else:
-            st.success("✅ Professional Access Active")
+            st.success("Professional Access Active")
             if st.button("Logout"):
                 st.session_state.auth = False
                 st.rerun()
@@ -657,7 +665,7 @@ def main():
                 file_hash = hashlib.md5(raw_payload + selected_preset.encode()).hexdigest()
 
                 if st.session_state.last_processed_file_hash != file_hash:
-                    st.sidebar.success("📦 Scanned file buffered successfully!")
+                    st.sidebar.success("Scanned file buffered successfully!")
                     if "line_diagnostics" in st.session_state:
                         del st.session_state.line_diagnostics
                     if 'ocr_pipeline' not in st.session_state:
@@ -671,7 +679,7 @@ def main():
                                 preset_mode=selected_preset
                             )
 
-                        st.sidebar.success("🎯 Analysis Complete!")
+                        st.sidebar.success("Analysis Complete!")
                         raw_ocr_lines = results["ocr_text"]
 
                         st.session_state.persistent_extracted_text = clean_extracted_text_via_dictionary(
