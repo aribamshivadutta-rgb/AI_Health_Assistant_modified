@@ -336,7 +336,7 @@ class OCRReaderPipeline:
             line_crops.append(block_crop[start_y:, :])
         return line_crops if len(line_crops) > 0 else [block_crop]
 
-    def process_image(self, image_input, true_label=None, preset_mode="High-Contrast Document (Zero-Centered)"):
+    def process_image(self, image_input, true_label=None, preset_mode="Raw Intensity Map ([0, 1])"):
         raw_img = None
         if isinstance(image_input, str):
             raw_img = cv2.imread(image_input, cv2.IMREAD_GRAYSCALE)
@@ -673,9 +673,10 @@ def main():
             st.divider()
             st.subheader("Clinical Data Upload")
 
+            # 🎯 FIXED: DEFAULT SET TO RAW INTENSITY TO AVOID FLOAT DRIFT
             selected_preset = st.selectbox(
                 "CRNN Tensor Matrix Preset",
-                ["High-Contrast Document (Zero-Centered)", "Raw Intensity Map ([0, 1])"]
+                ["Raw Intensity Map ([0, 1])", "High-Contrast Document (Zero-Centered)"]
             )
 
             uploaded_file = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
