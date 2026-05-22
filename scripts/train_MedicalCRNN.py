@@ -76,7 +76,7 @@ class MedicalDataset(Dataset):
             y_max, x_max = pts.max(axis=0)
             processed_img = processed_img[y_min:y_max + 1, x_min:x_max + 1]
 
-        # 🎯 HIGH-GENERALIZATION DATA AUGMENTATION PASS
+        # HIGH-GENERALIZATION DATA AUGMENTATION PASS
         if self.is_training:
             # A. Geometric Distortion (Forced rotation variety)
             if random.random() < 0.50:
@@ -129,11 +129,12 @@ class MedicalDataset(Dataset):
 
 
 # ====================================================================
-# 3. ARCHITECTURE BLOCK (Expanded Memory State Capabilities)
+# 3. ARCHITECTURE BLOCK (Fully Aligned to Deployment Scripts)
 # ====================================================================
 class MedicalCRNN(nn.Module):
     def __init__(self, vocab_size):
         super(MedicalCRNN, self).__init__()
+        # Pristine CNN sequential pipeline matching your stable .pth save footprint
         self.cnn = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2),
@@ -145,8 +146,7 @@ class MedicalCRNN(nn.Module):
             nn.BatchNorm2d(128), nn.ReLU(),
             nn.MaxPool2d((2, 1))
         )
-        # 🎯 CAPACITY UPGRADE: Expanded memory boundaries to resolve optimization plateaus
-        self.hidden_size = 256  # Upgraded from 128
+        self.hidden_size = 256  # Synced 256 matrix boundaries
         self.num_layers = 2
         self.rnn = nn.LSTM(input_size=1024, hidden_size=self.hidden_size, num_layers=self.num_layers,
                            bidirectional=True, batch_first=True)
@@ -207,7 +207,6 @@ def run_training():
     optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-4)
 
     TOTAL_EPOCHS = 350
-    # 🎯 SCHEDULER UPGRADE: Swapped out rigid Cosine scheduling for dynamic plateau monitoring
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=8, min_lr=1e-6
     )
@@ -218,7 +217,7 @@ def run_training():
     print(f"📊 Training Dimensions: {len(train_ds)} samples | Validation Test Dimensions: {len(test_ds)} samples")
 
     for epoch in range(TOTAL_EPOCHS):
-        # --- PHASE A: HIGH-STRESS TRAINING PASS ---
+        # --- PHASE A: TRAINING PASS ---
         model.train()
         train_epoch_loss = 0
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{TOTAL_EPOCHS} Train")
@@ -243,7 +242,7 @@ def run_training():
 
         avg_train_loss = train_epoch_loss / len(train_loader)
 
-        # --- PHASE B: LIVE TEST MONITORING PASS ---
+        # --- PHASE B: LIVE VAL MONITORING PASS ---
         model.eval()
         test_epoch_loss = 0
         with torch.no_grad():
@@ -259,14 +258,10 @@ def run_training():
                 test_epoch_loss += loss.item()
 
         avg_test_loss = test_epoch_loss / len(test_loader)
-
-        # 🎯 SCHEDULER UPDATE: Step learning rate based on real-time Unseen Test Loss performance
         scheduler.step(avg_test_loss)
 
-        # Get the current active learning rate from the optimizer tracking matrix
         current_lr = optimizer.param_groups[0]['lr']
-        print(
-            f"📉 Epoch {epoch + 1} Complete | LR: {current_lr:.6f} | Train Loss: {avg_train_loss:.4f} | Unseen Test Loss: {avg_test_loss:.4f}")
+        print(f"📉 Epoch {epoch + 1} Complete | LR: {current_lr:.6f} | Train Loss: {avg_train_loss:.4f} | Unseen Test Loss: {avg_test_loss:.4f}")
 
         # --- PHASE C: VAL GUARD SAVER ---
         if avg_test_loss < best_test_loss:

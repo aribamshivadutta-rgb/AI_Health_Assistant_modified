@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from st_supabase_connection import SupabaseConnection
 from pdf2image import convert_from_bytes
-from rapidfuzz import process, fuzz, distance  # 🏎️ RapidFuzz advanced matching metrics imported!
+from rapidfuzz import process, fuzz, distance
 
 # ====================================================================
 # BACKWARD COMPATIBILITY INJECTOR PATCH (SCI-KIT LEARN FIX)
@@ -53,7 +53,6 @@ except ImportError:
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
 if not IS_ONLINE_DEPLOYMENT:
-    # 💻 LOCAL WINDOWS ENVIRONMENT PATHS
     MODEL_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\models"
     DATA_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\chat_bot_clean"
     RAW_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\raw"
@@ -62,7 +61,6 @@ if not IS_ONLINE_DEPLOYMENT:
     TRAIN_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\train_lgbm.py"
     MED_CRNN_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\MedicalCRNN_clean"
 else:
-    # 🌐 ONLINE CLOUD HOSTING ENVIRONMENT PATHS
     MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
     DATA_DIR = os.path.join(PROJECT_ROOT, "data", "clean", "chat_bot_clean")
     RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw")
@@ -94,7 +92,7 @@ DISEASE_ALIASES = {
 }
 
 # ====================================================================
-# 2. DICTIONARY POST-PROCESSING ALIGNMENT LAYER (UPDATED FUZZ.WRATIO)
+# 2. DICTIONARY POST-PROCESSING ALIGNMENT LAYER
 # ====================================================================
 MEDICAL_DICTIONARY = [
     "Rx", "Stable", "Tablet", "Capsule", "Amoxicillin", "Paracetamol",
@@ -122,7 +120,6 @@ CRNN_EXCEPTION_PATCH = {
 
 
 def clean_extracted_text_via_dictionary(raw_text, dictionary=MEDICAL_DICTIONARY):
-    """Fixes handwriting slips by utilizing substring-weighted similarity tokens."""
     cleaned_lines = []
     for line in raw_text.split("\n"):
         stripped = line.strip()
@@ -134,7 +131,6 @@ def clean_extracted_text_via_dictionary(raw_text, dictionary=MEDICAL_DICTIONARY)
             cleaned_lines.append(corrected_target)
             continue
 
-        # 🚀 FIXED WRATIO SCORER: Anchors short strings perfectly without length penalization distortions
         result = process.extractOne(
             stripped,
             dictionary,
@@ -193,14 +189,15 @@ def save_user_cloud(v_id, email, key):
 
 def verify_user_cloud(v_id, input_key):
     try:
-        query = conn.table("user_identities").select("*").eq("visitor_id", v_id).eq("permanent_key", str(input_key)).execute()
+        query = conn.table("user_identities").select("*").eq("visitor_id", v_id).eq("permanent_key",
+                                                                                    str(input_key)).execute()
         return len(query.data) > 0
     except:
         return False
 
 
 # ====================================================================
-# 4. FIXED & UPGRADED DEEP LEARNING ARCHITECTURE
+# 4. FIXED & FULLY SYNCHRONIZED ARCHITECTURE BLOCK
 # ====================================================================
 class MedicalLabelEncoder:
     def __init__(self):
@@ -223,7 +220,6 @@ class MedicalLabelEncoder:
 class MedicalCRNN(nn.Module):
     def __init__(self, vocab_size):
         super(MedicalCRNN, self).__init__()
-        # Aligned layout sequence blocks synchronized perfectly with training scripts
         self.cnn = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2),
@@ -235,8 +231,7 @@ class MedicalCRNN(nn.Module):
             nn.BatchNorm2d(128), nn.ReLU(),
             nn.MaxPool2d((2, 1))
         )
-        # 🎯 HIGH-CAPACITY ALIGNMENT SLOT
-        self.hidden_size = 256  # Upgraded from 128 to interface with MedicalCRNN_v1.pth
+        self.hidden_size = 256
         self.num_layers = 2
         self.rnn = nn.LSTM(input_size=1024, hidden_size=self.hidden_size, num_layers=self.num_layers,
                            bidirectional=True, batch_first=True)
@@ -280,11 +275,20 @@ class OCRReaderPipeline:
         if os.path.exists(CRNN_WEIGHTS):
             raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
             sanitized_state_dict = {k.replace("module.", ""): v for k, v in raw_state_dict.items()}
-            self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
+            self.text_recognizer.load_state_dict(sanitized_state_dict, strict=False)
         self.text_recognizer.eval()
 
     def _split_lines_by_projection(self, block_crop):
-        _, thresh_crop = cv2.threshold(thresh_crop:=block_crop.copy(), 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        if len(block_crop.shape) == 3:
+            gray_crop = cv2.cvtColor(block_crop, cv2.COLOR_BGR2GRAY)
+        else:
+            gray_crop = block_crop.copy()
+
+        if np.mean(gray_crop) > 127:
+            _, thresh_crop = cv2.threshold(gray_crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        else:
+            _, thresh_crop = cv2.threshold(gray_crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
         horizontal_sum = np.sum(thresh_crop, axis=1)
 
         line_crops = []
@@ -319,21 +323,32 @@ class OCRReaderPipeline:
                 else:
                     raise ValueError("Empty PDF container.")
             else:
-                file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-                image_input.seek(0)
-                raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
+                try:
+                    image_input.seek(0)
+                    file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
+                    raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
+                    image_input.seek(0)
+                except AttributeError:
+                    file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
+                    raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
 
         if raw_img is None:
             raise ValueError("Corrupt file tensor element passed.")
 
-        orig_h, orig_w = raw_img.shape
+        orig_h, orig_w = raw_img.shape[:2]
+
+        is_full_prescription = True
+        aspect_ratio = orig_w / float(orig_h)
+        if aspect_ratio > 2.0 or orig_h < 150:
+            is_full_prescription = False
+
         resized_img = cv2.resize(raw_img, (512, 512))
         processed_unet_input = cv2.bitwise_not(resized_img) if np.mean(resized_img) > 127 else resized_img.copy()
         img_input = processed_unet_input / 255.0
         img_tensor = torch.from_numpy(img_input).unsqueeze(0).unsqueeze(0).float().to(self.device)
 
         mask = np.zeros((512, 512), dtype=np.uint8)
-        if self.detector is not None:
+        if self.detector is not None and is_full_prescription:
             with torch.no_grad():
                 mask_output = torch.sigmoid(self.detector(img_tensor))
                 raw_mask_np = mask_output.squeeze().detach().cpu().numpy()
@@ -347,53 +362,58 @@ class OCRReaderPipeline:
         debug_crops_pool = []
 
         if self.text_recognizer is not None:
-            if self.detector is not None and np.sum(mask) > 1000:
+            if self.detector is not None and np.sum(mask) > 1000 and is_full_prescription:
                 resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 2))
-                processed_mask = cv2.dilate(resized_mask, horizontal_kernel, iterations=1)
+                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+                processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, horizontal_kernel)
                 mask_status_log = f"🟢 U-Net Mask Active! Found {np.sum(mask > 0)} target pixels."
             else:
-                mask_status_log = f"🔴 Swapped to Adaptive Morphology Layout Slicing Engine"
+                mask_status_log = f"🔴 Adaptive Pass Active"
                 if np.mean(raw_img) > 127:
                     _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 else:
                     _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 2))
-                processed_mask = cv2.dilate(thresh, kernel, iterations=1)
-
-            line_bounding_boxes = []
-            contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            if len(contours) > 0:
-                contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
-                for ctr in contours:
-                    if isinstance(ctr, np.ndarray) and len(ctr) > 0:
-                        xc, yc, wc, hc = cv2.boundingRect(ctr)
-                        if wc > 12 and hc > 8:
-                            aspect_ratio = wc / float(hc)
-                            if aspect_ratio < 1.8 and wc < 200:
-                                continue
-                            line_bounding_boxes.append((xc, yc, wc, hc))
-
-            if not line_bounding_boxes:
-                chunk_h = orig_h // 12
-                for i in range(12):
-                    line_bounding_boxes.append((0, i * chunk_h, orig_w, chunk_h))
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+                processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
             extracted_line_crops = []
-            for (x, y, cw, ch) in line_bounding_boxes:
-                pad_y1, pad_y2 = max(0, y - 4), min(orig_h, y + ch + 4)
-                pad_x1, pad_x2 = max(0, x - 4), min(orig_w, x + cw + 4)
-                block_crop = raw_img[pad_y1:pad_y2, pad_x1:pad_x2]
-                if block_crop.size == 0:
-                    continue
-                tokenized_lines = self._split_lines_by_projection(block_crop)
-                extracted_line_crops.extend(tokenized_lines)
 
-            preview_canvas = np.zeros((orig_h, orig_w), dtype=np.uint8)
-            for (bx, by, bw, bh) in line_bounding_boxes:
-                cv2.rectangle(preview_canvas, (bx, by), (bx + bw, by + bh), (255), thickness=-1)
-            ui_mask_preview = cv2.resize(preview_canvas, (512, 512)).astype(np.uint8)
+            if is_full_prescription:
+                line_bounding_boxes = []
+                contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                if len(contours) > 0:
+                    contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
+                    for ctr in contours:
+                        if isinstance(ctr, np.ndarray) and len(ctr) > 0:
+                            xc, yc, wc, hc = cv2.boundingRect(ctr)
+                            if wc > 25 and hc > 10:
+                                comp_ratio = wc / float(hc)
+                                if 0.8 <= comp_ratio <= 1.3 and wc < 140:
+                                    continue
+                                line_bounding_boxes.append((xc, yc, wc, hc))
+
+                if not line_bounding_boxes:
+                    chunk_h = orig_h // 12
+                    for i in range(12):
+                        line_bounding_boxes.append((0, i * chunk_h, orig_w, chunk_h))
+
+                for (x, y, cw, ch) in line_bounding_boxes:
+                    pad_y1, pad_y2 = max(0, y - 4), min(orig_h, y + ch + 4)
+                    pad_x1, pad_x2 = max(0, x - 4), min(orig_w, x + cw + 4)
+                    block_crop = raw_img[pad_y1:pad_y2, pad_x1:pad_x2]
+                    if block_crop.size == 0:
+                        continue
+                    tokenized_lines = self._split_lines_by_projection(block_crop)
+                    extracted_line_crops.extend(tokenized_lines)
+
+                preview_canvas = np.zeros((orig_h, orig_w), dtype=np.uint8)
+                for (bx, by, bw, bh) in line_bounding_boxes:
+                    cv2.rectangle(preview_canvas, (bx, by), (bx + bw, by + bh), (255), thickness=-1)
+                ui_mask_preview = cv2.resize(preview_canvas, (512, 512)).astype(np.uint8)
+            else:
+                extracted_line_crops.append(raw_img.copy())
+                ui_mask_preview = np.zeros((512, 512), dtype=np.uint8)
 
             USE_ZERO_CENTERED_SCALE = "Zero-Centered" in preset_mode
             st.session_state.line_diagnostics = []
@@ -404,12 +424,27 @@ class OCRReaderPipeline:
 
                 target_w, target_h = 256, 64
                 crnn_input = np.ones((target_h, target_w), dtype=np.uint8) * 255
-                scale = min(target_w / crop.shape[1], target_h / crop.shape[0])
-                nw, nh = max(4, int(crop.shape[1] * scale)), max(4, int(crop.shape[0] * scale))
-                resized_crop = cv2.resize(crop, (min(nw, target_w), min(nh, target_h)))
 
-                start_x, start_y = (target_w - nw) // 2, (target_h - nh) // 2
-                crnn_input[start_y:start_y + nh, start_x:start_x + nw] = resized_crop
+                # 🎯 UNIFIED SAFE GEOMETRY RESOLUTION PIPELINE
+                h_crop, w_crop = crop.shape[:2]
+                scale = target_h / float(h_crop)
+                nw = int(w_crop * scale)
+                nh = target_h
+
+                if nw > target_w:
+                    scale = target_w / float(w_crop)
+                    nw = target_w
+                    nh = int(h_crop * scale)
+
+                nw = max(1, nw)
+                nh = max(1, nh)
+
+                resized_crop = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+                start_x = 5
+                start_y = max(0, (target_h - nh) // 2)
+                actual_w = min(nw, target_w - start_x)
+                crnn_input[start_y:start_y + nh, start_x:start_x + actual_w] = resized_crop[:, :actual_w]
 
                 if len(debug_crops_pool) < 4:
                     debug_crops_pool.append(crnn_input.copy())
@@ -424,11 +459,12 @@ class OCRReaderPipeline:
                 crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
 
                 with torch.no_grad():
-                    # Optimized runtime initialization map arrays for expanded layer dimensions
                     batch_size = crnn_tensor.size(0)
                     num_directions = 2
-                    h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size, self.text_recognizer.hidden_size).to(self.device)
-                    c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size, self.text_recognizer.hidden_size).to(self.device)
+                    h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
+                                     self.text_recognizer.hidden_size).to(self.device)
+                    c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
+                                     self.text_recognizer.hidden_size).to(self.device)
 
                     logits = self.text_recognizer(crnn_tensor, (h0, c0))
                     probs = torch.exp(logits).squeeze(0)
@@ -498,7 +534,8 @@ class MedicalAI:
             with open(REQUESTS_FILE, 'w', newline='', encoding='utf-8') as f:
                 csv.writer(f).writerow(["timestamp", "source_url", "proposed_disease", "symptoms", "status"])
         with open(REQUESTS_FILE, 'a', newline='', encoding='utf-8') as f:
-            csv.writer(f).writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "App", disease_name, "Pending", "Pending"])
+            csv.writer(f).writerow(
+                [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "App", disease_name, "Pending", "Pending"])
         return True
 
     def execute_verification_cycle(self):
@@ -545,7 +582,7 @@ class MedicalAI:
 
 
 # ====================================================================
-# 6. CORE SYSTEM PRESENTATION WORKSPACE
+# 6. SYSTEM PRESENTATION WORKSPACE
 # ====================================================================
 def main():
     if 'bot' not in st.session_state:
@@ -558,6 +595,9 @@ def main():
         st.session_state.cached_mask_preview = None
     if "mask_execution_log" not in st.session_state:
         st.session_state.mask_execution_log = "No file parsed during this session loop."
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Hello! I can identify health risks. How are you feeling?"}]
 
     v_id = get_visitor_id()
 
@@ -569,7 +609,7 @@ def main():
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
             with tab_unlock:
-                pin = st.text_input("Enter 6-Digit Key", type="password")
+                pin = st.text_input("Enter 6-Digit Key", type="password", key="vault_pin")
                 if st.button("Unlock Features"):
                     if verify_user_cloud(v_id, pin):
                         st.session_state.auth = True
@@ -577,7 +617,7 @@ def main():
                     else:
                         st.error("Invalid Key for this device.")
             with tab_reg:
-                mail = st.text_input("Email for Key")
+                mail = st.text_input("Email for Key", key="vault_email")
                 if st.button("Generate Key"):
                     if "@" in mail:
                         k = generate_permanent_key(mail)
@@ -627,7 +667,21 @@ def main():
                             raw_ocr_lines,
                             dictionary=st.session_state.ocr_pipeline.medical_dictionary
                         )
-                        st.session_state.extracted_file_text = st.session_state.persistent_extracted_text
+
+                        ocr_payload = st.session_state.persistent_extracted_text
+                        st.session_state.messages.append(
+                            {"role": "user", "content": f"📋 *[Uploaded Report Data]:* {ocr_payload}"})
+
+                        disease, matched, conf = st.session_state.bot.predict(ocr_payload)
+                        if matched:
+                            response_text = f"⚙️ **Automated Report Diagnostics Active:**\n\n" \
+                                            f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}% confidence)\n" \
+                                            f"\n**Extracted Matching Features:** {', '.join(matched).replace('_', ' ')}"
+                        else:
+                            response_text = f"I detected '{ocr_payload}' in the document, but I couldn't map it cleanly to known symptoms."
+
+                        st.session_state.messages.append({"role": "assistant", "content": response_text})
+
                         st.session_state.cached_mask_preview = results["mask_preview"].copy()
                         st.session_state.mask_execution_log = f"🟢 Isolated {len(results.get('line_crops_list', []))} tailored crops."
                         st.session_state.debug_crops = results.get("line_crops_list", [])
@@ -642,7 +696,8 @@ def main():
                     tab_metrics, tab_mask, tab_debug = st.sidebar.tabs(["Analysis", "U-Net Mask", "CRNN Input Debug"])
                     with tab_metrics:
                         detector_loaded = st.session_state.ocr_pipeline.detector is not None
-                        st.sidebar.caption(f"File Found? `{os.path.exists(DETECTOR_WEIGHTS)}` | Initialized? `{detector_loaded}`")
+                        st.sidebar.caption(
+                            f"File Found? `{os.path.exists(DETECTOR_WEIGHTS)}` | Initialized? `{detector_loaded}`")
                         st.sidebar.divider()
                         st.metric("Inferred Category", "Prescription/Symptom")
                         st.metric("Router Confidence", "93.90%")
@@ -653,7 +708,7 @@ def main():
                     with tab_mask:
                         st.success(st.session_state.mask_execution_log)
                         if st.session_state.cached_mask_preview is not None:
-                            st.image(st.session_state.cached_mask_preview, caption="Segmentation Preview Canvas", use_container_width=True)
+                            st.image(st.session_state.cached_mask_preview, caption="Segmentation Preview Canvas")
 
                     with tab_debug:
                         st.subheader("🔬 Neural Layer Verification Dashboard")
@@ -673,41 +728,19 @@ def main():
                         if crops:
                             for idx, crop_frame in enumerate(crops[:4]):
                                 if crop_frame.size > 0:
-                                    st.image(crop_frame, caption=f"Crop Segment Frame Row #{idx + 1}", use_container_width=True)
+                                    st.image(crop_frame, caption=f"Crop Segment Frame Row #{idx + 1}")
 
     st.title("💬 AI Health Assistant")
     weights_ready = os.path.exists(MODEL_PATH) and os.path.exists(LE_PATH)
     if not weights_ready:
-        st.warning("⚠️ Model architectural weights not found. Type 'verify now' to compile classifier binaries live.")
+        st.warning("⚠️ Model weights not found. Type 'verify now' to compile classifier binaries live.")
 
     if not st.session_state.auth:
         st.caption("🟢 Guest Mode: Symptom analysis is active. Login for report analysis.")
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": "Hello! I can identify health risks. How are you feeling?"}]
-
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-
-    if 'extracted_file_text' in st.session_state and st.session_state.extracted_file_text:
-        ocr_payload = st.session_state.extracted_file_text
-        del st.session_state['extracted_file_text']
-
-        st.session_state.messages.append({"role": "user", "content": f"📋 *[Uploaded Report Data]:* {ocr_payload}"})
-        bot = st.session_state.bot
-        disease, matched, conf = bot.predict(ocr_payload)
-
-        if matched:
-            response_text = f"⚙️ **Automated Report Diagnostics Active:**\n\n" \
-                            f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}% confidence)\n" \
-                            f"\n**Extracted Matching Features:** {', '.join(matched).replace('_', ' ')}"
-        else:
-            response_text = f"I detected '{ocr_payload}' in the document, but I couldn't map it cleanly to known symptoms in my classification database."
-
-        st.session_state.messages.append({"role": "assistant", "content": response_text})
-        st.canvas_key = str(uuid.uuid4())
-        st.rerun()
 
     if prompt := st.chat_input("Enter symptoms (e.g. fever, headache)..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
