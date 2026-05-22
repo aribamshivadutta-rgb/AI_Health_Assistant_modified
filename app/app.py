@@ -58,7 +58,6 @@ if not IS_ONLINE_DEPLOYMENT:
     MED_CRNN_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\MedicalCRNN_clean"
 else:
     # 🎯 LINUX CLOUD SELF-CORRECTING PATH FINDER
-    # Iterates up to 2 directories backward to locate your 'models' directory path anchor online
     possible_roots = [
         CURRENT_SCRIPT_DIR,
         os.path.dirname(CURRENT_SCRIPT_DIR),
@@ -361,12 +360,10 @@ class OCRReaderPipeline:
         mask = np.zeros((512, 512), dtype=np.uint8)
         if self.detector is not None and is_full_prescription:
             with torch.no_grad():
-                mask_output = torch.sigmoid(self.detector(img_tensor))
+                # 🎯 PARITY SYNCHRONIZATION: Direct threshold assessment without scale-compressing sigmoid wrapper
+                mask_output = self.detector(img_tensor)
                 raw_mask_np = mask_output.squeeze().detach().cpu().numpy()
-                max_activation = np.max(raw_mask_np)
-                if max_activation > 0.1:
-                    dynamic_threshold = 0.3 if max_activation > 0.5 else (max_activation * 0.5)
-                    mask = (raw_mask_np > dynamic_threshold).astype(np.uint8) * 255
+                mask = (raw_mask_np > 0.5).astype(np.uint8) * 255
 
         final_text_lines = []
         mask_status_log = "⚠️ Detector Weights Bypassed"
@@ -376,7 +373,7 @@ class OCRReaderPipeline:
             extracted_line_crops = []
 
             # Clean pristine image segmentation handling sequence
-            if self.detector is not None and np.sum(mask) > 1000 and is_full_prescription:
+            if self.detector is not None and np.sum(mask > 0) > 1000 and is_full_prescription:
                 resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
                 horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
                 processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, horizontal_kernel)
@@ -472,10 +469,12 @@ class OCRReaderPipeline:
                 with torch.no_grad():
                     batch_size = crnn_tensor.size(0)
                     num_directions = 2
+
+                    # 🎯 ENFORCE DTYPE CONSISTENCY: Hard-casted float32 baseline prevents sequential LSTM truncation drops on CPU
                     h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
-                                     self.text_recognizer.hidden_size).to(self.device)
+                                     self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
                     c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
-                                     self.text_recognizer.hidden_size).to(self.device)
+                                     self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
 
                     logits = self.text_recognizer(crnn_tensor, (h0, c0))
                     probs = torch.exp(logits).squeeze(0)
