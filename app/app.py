@@ -46,7 +46,7 @@ except ImportError:
     MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. FIXED SELF-CORRECTING PATH MATRIX
+# 1. FIXED SELF-CORRECTING PATH MATRIX & DATABASE UTILS
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
@@ -94,9 +94,10 @@ DETECTOR_WEIGHTS = os.path.join(MODEL_DIR, "medical_detector.pth")
 TRAFFIC_ROUTER_WEIGHTS = os.path.join(MODEL_DIR, "MedicalTrafficRouter_v1.pkl")
 TRAFFIC_VECTORIZER_WEIGHTS = os.path.join(MODEL_DIR, "MedicalTrafficRouter_v1_vectorizer.pkl")
 
-# --- UPDATED PATHS FOR HIGH-ACCURACY RESIDUAL MODEL ---
+# --- UPDATED PATHS FOR HIGH-ACCURACY RESIDUAL MODEL & DATABASE ---
 CRNN_WEIGHTS = os.path.join(MODEL_DIR, "MedicalCRNN_v2_Residual.pth")
 VOCAB_JSON = os.path.join(MODEL_DIR, "medical_vocab.json")
+DB_PATH = os.path.join(MED_CRNN_DIR, "Final_Compiled_Medicine_Database.xlsx")
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(RAW_DIR, exist_ok=True)
@@ -108,6 +109,32 @@ DISEASE_ALIASES = {
     "heart attack": "myocardial infarction", "brain stroke": "cerebrovascular accident"
 }
 
+
+# ----------------- DATABASE UTILITY FUNCTIONS -----------------
+def load_medicine_database(db_path):
+    if not os.path.exists(db_path):
+        return None
+    try:
+        df = pd.read_excel(db_path)
+        search_column = 'Medicine' if 'Medicine' in df.columns else df.columns[0]
+        df['lookup_key'] = df[search_column].astype(str).str.strip().str.lower()
+
+        # Drop duplicate medicines so the index is perfectly unique
+        df = df.drop_duplicates(subset=['lookup_key'], keep='first')
+
+        return df.set_index('lookup_key').dropna(axis=1, how='all').to_dict(orient='index')
+    except Exception as e:
+        print(f"Error reading database: {str(e)}")
+        return None
+
+
+def fetch_medicine_details_fast(extracted_name, lookup_dict):
+    if not lookup_dict:
+        return None
+    search_term = str(extracted_name).strip().lower()
+    return lookup_dict.get(search_term, None)
+
+
 # ====================================================================
 # 2. DICTIONARY POST-PROCESSING ALIGNMENT LAYER
 # ====================================================================
@@ -117,7 +144,8 @@ MEDICAL_DICTIONARY = [
     "Syrup", "Injection", "Pantoprazole", "Vitamin-C", "Cetirizine",
     "FeSO4", "Ascorbic Acid", "once a day", "twice a day", "Napdos",
     "Losita", "Rivotril", "Econate", "Kacin", "bengel", "Omep", "Fougest",
-    "RUPIN", "myolax", "Tenocab", "Radifil", "Povital", "Napa", "Voligel", "lactomore", "Don A"
+    "RUPIN", "myolax", "Tenocab", "Radifil", "Povital", "Napa", "Voligel", "lactomore", "Don A",
+    "Calbo-D"
 ]
 
 CRNN_EXCEPTION_PATCH = {
@@ -275,9 +303,8 @@ class MedicalResidualCRNN(nn.Module):
         self.pool4 = nn.MaxPool2d((2, 1))
 
         self.hidden_size = 256
-        self.num_layers = 2  # 🟢 THE FIX IS HERE
+        self.num_layers = 2
 
-        # Set dropout to 0.0 for inference to get stable predictions
         self.rnn = nn.LSTM(input_size=512 * 4, hidden_size=self.hidden_size, num_layers=self.num_layers,
                            bidirectional=True, batch_first=True, dropout=0.0)
         self.fc = nn.Linear(self.hidden_size * 2, vocab_size)
@@ -309,7 +336,6 @@ class OCRReaderPipeline:
         self.detector = None
         self.text_recognizer = None
 
-        # Initialize encoder from the fast JSON file
         if os.path.exists(VOCAB_JSON):
             self.encoder = MedicalLabelEncoder(VOCAB_JSON)
             self.medical_dictionary = list(self.encoder.lexicon)
@@ -657,6 +683,11 @@ def main():
         st.session_state.bot = MedicalAI()
     if 'auth' not in st.session_state:
         st.session_state.auth = False
+
+    # Load the database globally into session state ONCE at startup
+    if 'db_lookup' not in st.session_state:
+        st.session_state.db_lookup = load_medicine_database(DB_PATH)
+
     if "last_processed_file_hash" not in st.session_state:
         st.session_state.last_processed_file_hash = None
     if "cached_mask_preview" not in st.session_state:
@@ -678,6 +709,7 @@ def main():
         st.text(f"Is Online Host? {IS_ONLINE_DEPLOYMENT}")
         st.text(f"Target Checkpoint Location:\n{DETECTOR_WEIGHTS}")
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
+        st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
         st.divider()
 
         if not st.session_state.auth:
@@ -738,6 +770,7 @@ def main():
                         st.sidebar.success("Analysis Complete!")
                         raw_ocr_lines = results["ocr_text"]
 
+                        # Apply OCR Lexicon correction
                         st.session_state.persistent_extracted_text = clean_extracted_text_via_dictionary(
                             raw_ocr_lines,
                             dictionary=st.session_state.ocr_pipeline.medical_dictionary
@@ -745,15 +778,36 @@ def main():
 
                         ocr_payload = st.session_state.persistent_extracted_text
                         st.session_state.messages.append(
-                            {"role": "user", "content": f"📋 *[Uploaded Report Data]:* {ocr_payload}"})
+                            {"role": "user", "content": f"📋 *[Uploaded Report Data]:* \n{ocr_payload}"})
 
+                        # 🟢 SWEEP DATABASE FOR MATCHES (BULLETED LIST)
+                        db_insights = ""
+                        if st.session_state.db_lookup:
+                            for line in ocr_payload.split("\n"):
+                                med_info = fetch_medicine_details_fast(line.strip(), st.session_state.db_lookup)
+                                if med_info and "Error" not in med_info:
+                                    generic = med_info.get('Generic Name', 'N/A')
+                                    purpose = med_info.get('Use/Purpose', 'N/A')
+                                    mfg = med_info.get('Manufacturer', 'N/A')
+
+                                    # Formatted with standard Markdown bullet points
+                                    db_insights += f"💊 **{line.strip()}**\n" \
+                                                   f"* 👉 **Generic Name:** {generic}\n" \
+                                                   f"* 👉 **Purpose:** {purpose}\n" \
+                                                   f"* 👉 **Manufacturer:** {mfg}\n\n"
+
+                        # Build Final Assistant Response
                         disease, matched, conf = st.session_state.bot.predict(ocr_payload)
                         if matched:
                             response_text = f"⚙️ **Automated Report Diagnostics Active:**\n\n" \
                                             f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}% confidence)\n" \
                                             f"\n**Extracted Matching Features:** {', '.join(matched).replace('_', ' ')}"
                         else:
-                            response_text = f"I detected '{ocr_payload}' in the document, but I couldn't map it cleanly to known symptoms."
+                            response_text = f"I detected the following text in the document, but I couldn't map it cleanly to known symptoms."
+
+                        # Inject Database Details if found
+                        if db_insights:
+                            response_text += f"\n\n📚 **Medical Database Matches Found:**\n\n{db_insights}"
 
                         st.session_state.messages.append({"role": "assistant", "content": response_text})
 
