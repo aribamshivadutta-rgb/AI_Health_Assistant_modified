@@ -714,14 +714,7 @@ def main():
                 ["High-Contrast Document (Zero-Centered)", "Raw Intensity Map ([0, 1])"]
             )
 
-            # Updated Input Method Selection
-            input_method = st.radio("Select Input Method:", ["Upload File", "Take Photo"])
-            uploaded_file = None
-
-            if input_method == "Upload File":
-                uploaded_file = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
-            else:
-                uploaded_file = st.camera_input("Take a photo of the medicine")
+            uploaded_file = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
 
             if uploaded_file is not None:
                 raw_payload = uploaded_file.getvalue()
