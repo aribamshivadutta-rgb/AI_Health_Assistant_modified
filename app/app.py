@@ -106,10 +106,19 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # ----------------- DATABASE UTILITY FUNCTIONS -----------------
 def load_medicine_database(db_path):
-    if not os.path.exists(db_path):
+    # CLOUD FAILSAFE: If the file was uploaded without an extension, adapt to it.
+    fallback_path = db_path.replace(".xlsx", "")
+    actual_path = db_path
+
+    if not os.path.exists(db_path) and os.path.exists(fallback_path):
+        actual_path = fallback_path
+
+    if not os.path.exists(actual_path):
         return None
+
     try:
-        df = pd.read_excel(db_path)
+        # Force the openpyxl engine in case the file extension is missing
+        df = pd.read_excel(actual_path, engine='openpyxl')
         search_column = 'Medicine' if 'Medicine' in df.columns else df.columns[0]
         df['lookup_key'] = df[search_column].astype(str).str.strip().str.lower()
 
@@ -725,6 +734,12 @@ def main():
         st.text(f"Target Checkpoint Location:\n{DETECTOR_WEIGHTS}")
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
+
+        # Temporary Database Debug Text
+        if not st.session_state.db_lookup and os.path.exists(MED_CRNN_DIR):
+            st.caption("Debugging CRNN Folder Contents:")
+            st.caption(str(os.listdir(MED_CRNN_DIR)))
+
         st.divider()
 
         if not st.session_state.auth:
