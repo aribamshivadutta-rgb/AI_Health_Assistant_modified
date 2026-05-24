@@ -103,12 +103,6 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
-DISEASE_ALIASES = {
-    "common cold": "upper respiratory infection", "cold": "upper respiratory infection",
-    "flu": "influenza", "sugar": "diabetes", "bp": "hypertension",
-    "heart attack": "myocardial infarction", "brain stroke": "cerebrovascular accident"
-}
-
 
 # ----------------- DATABASE UTILITY FUNCTIONS -----------------
 def load_medicine_database(db_path):
@@ -480,7 +474,7 @@ class OCRReaderPipeline:
                             xc, yc, wc, hc = cv2.boundingRect(ctr)
 
                             # ==========================================
-                            # 🎯 FIX 1: SPATIAL HEURISTIC FILTERING
+                            # 🎯 FIX: SPATIAL HEURISTIC FILTERING
                             # ==========================================
                             y_center = yc + (hc / 2)
                             y_percentage = y_center / orig_h
@@ -582,7 +576,7 @@ class OCRReaderPipeline:
                     decoded_line = self.encoder.decode(best_path).strip()
 
                     # ==========================================
-                    # 🎯 FIX 2: KEYWORD & LENGTH FILTERING
+                    # 🎯 FIX: KEYWORD & LENGTH FILTERING
                     # ==========================================
                     text_lower = decoded_line.lower()
                     med_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
@@ -600,7 +594,6 @@ class OCRReaderPipeline:
                                     "raw_tokens": list(best_path[:12]),
                                     "active_indices": active_tokens
                                 })
-                    # ==========================================
 
             ocr_text_output = "\n".join(final_text_lines) if final_text_lines else "No readable text extracted."
         else:
