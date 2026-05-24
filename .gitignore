@@ -1,5 +1,13 @@
-# Block all local raw and cleaned training datasets
-data/
+# Ignore the general folders
 data/raw/
-data/clean/
+data/temp/
+
+# Ignore all csv files...
 *.csv
+# ...BUT keep these specific training/test files
+!data/clean/MedicalCRNN_clean/*.csv
+
+# Ignore the models folder...
+models/
+# ...BUT keep your specific trained model
+!models/MedicalCRNN_v2_Residual.pth

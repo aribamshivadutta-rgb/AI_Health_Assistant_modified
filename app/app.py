@@ -478,6 +478,18 @@ class OCRReaderPipeline:
                     for ctr in contours:
                         if isinstance(ctr, np.ndarray) and len(ctr) > 0:
                             xc, yc, wc, hc = cv2.boundingRect(ctr)
+
+                            # ==========================================
+                            # 🎯 FIX 1: SPATIAL HEURISTIC FILTERING
+                            # ==========================================
+                            y_center = yc + (hc / 2)
+                            y_percentage = y_center / orig_h
+
+                            # Ignore top 28% (Patient info) and bottom 20% (Doctor info)
+                            if y_percentage < 0.28 or y_percentage > 0.80:
+                                continue
+                            # ==========================================
+
                             if wc > 25 and hc > 10:
                                 comp_ratio = wc / float(hc)
                                 if 0.8 <= comp_ratio <= 1.3 and wc < 140:
@@ -569,16 +581,26 @@ class OCRReaderPipeline:
                     active_tokens = [int(token_idx) for token_idx in best_path if token_idx != 0]
                     decoded_line = self.encoder.decode(best_path).strip()
 
-                    if decoded_line and len(decoded_line) > 1 and "expected" not in decoded_line.lower():
-                        final_text_lines.append(decoded_line)
+                    # ==========================================
+                    # 🎯 FIX 2: KEYWORD & LENGTH FILTERING
+                    # ==========================================
+                    text_lower = decoded_line.lower()
+                    med_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
+                                    "a.d."]
 
-                        if len(st.session_state.line_diagnostics) < 4:
-                            st.session_state.line_diagnostics.append({
-                                "text": decoded_line,
-                                "confidence": f"{line_confidence:.2f}%",
-                                "raw_tokens": list(best_path[:12]),
-                                "active_indices": active_tokens
-                            })
+                    if decoded_line and len(decoded_line) > 1 and "expected" not in text_lower:
+                        # Keep if it matches a known keyword OR is a sufficiently long word
+                        if any(kw in text_lower for kw in med_keywords) or len(decoded_line) >= 4:
+                            final_text_lines.append(decoded_line)
+
+                            if len(st.session_state.line_diagnostics) < 4:
+                                st.session_state.line_diagnostics.append({
+                                    "text": decoded_line,
+                                    "confidence": f"{line_confidence:.2f}%",
+                                    "raw_tokens": list(best_path[:12]),
+                                    "active_indices": active_tokens
+                                })
+                    # ==========================================
 
             ocr_text_output = "\n".join(final_text_lines) if final_text_lines else "No readable text extracted."
         else:

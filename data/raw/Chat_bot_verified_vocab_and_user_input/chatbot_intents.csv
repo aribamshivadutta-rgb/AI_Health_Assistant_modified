@@ -1,8 +1,0 @@
-intent_trigger,bot_response,verified_at
-hello,Hello! I am your AI Health Assistant. How can I help you today?,2025-11-27 21:00:39
-hi,Hi there! Please tell me your symptoms.,2025-11-27 21:00:39
-who are you,I am an AI trained to help identify potential health issues based on symptoms.,2025-11-27 21:00:39
-help,"Please type your symptoms separated by commas (e.g. fever, cough).",2025-11-27 21:00:39
-bye,Take care! Remember to consult a doctor for a professional diagnosis.,2025-11-27 21:00:39
-thank you,You're welcome! Stay healthy.,2025-11-27 21:00:39
-what can you do,"I can analyze symptoms and predict potential conditions, or learn new diseases if you teach me.",2025-11-27 21:00:39

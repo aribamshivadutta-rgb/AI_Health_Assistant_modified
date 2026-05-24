@@ -1,4 +1,0 @@
-timestamp,user_input,ai_prediction,confidence,status
-2025-11-27 21:11:50,"cough, sore throat, runny or stuffy nose, and fever",transient ischemic attack,0.16700104894030532,Predicted
-2025-11-27 20:38:35,"cough, sore throat, runny or stuffy nose, and fever",transient ischemic attack,0.16700104894030532,Predicted
-2025-11-29 21:19:23,"cough, sore throat, runny or stuffy nose, and fever",upper respiratory infection,0.30912775088088384,Predicted

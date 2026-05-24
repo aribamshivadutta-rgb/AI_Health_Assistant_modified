@@ -116,7 +116,6 @@ class OCRReaderPipeline:
                 self.vectorizer = joblib.load(vectorizer_path)
                 print("🟢 Traffic Router models unpickled successfully.")
             except (AttributeError, ValueError, KeyError) as e:
-                # CLOUD SAFEGUARD: Gracefully catches version differences between scikit-learn 1.7.2 vs 1.4.2
                 print(f"⚠️ Cloud Environment Version Mismatch: {e}")
                 print("🔄 Activating adaptive fallback heuristics routing mode to bypass serialization conflict.")
                 self.router = "FALLBACK_MODE"
@@ -189,7 +188,6 @@ class OCRReaderPipeline:
         target_w, target_h = 256, 64
         padded_canvas = np.ones((target_h, target_w), dtype=np.uint8) * 255
 
-        # Calculate target dimensions using safe float conversions
         scale = target_h / float(h_img)
         nw = int(w_img * scale)
         nh = target_h
@@ -199,7 +197,6 @@ class OCRReaderPipeline:
             nw = target_w
             nh = int(h_img * scale)
 
-        # BULLETPROOF GEOMETRIC BOUNDS PROTECTION
         nw = max(1, nw)
         nh = max(1, nh)
 
@@ -240,8 +237,7 @@ class OCRReaderPipeline:
             is_full_prescription = False
             print(f"⚡ Pipeline Gate: Single-word crop validated ({orig_w}x{orig_h}). Bypassing splitter.")
 
-        # 🎯 FIX: FORCE VISION VIA ADAPTIVE HISTOGRAM EQUALIZATION (CLAHE)
-        # Prevents U-Net from failing under low contrast or uneven lighting conditions
+        # FORCE VISION VIA ADAPTIVE HISTOGRAM EQUALIZATION (CLAHE)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         equalized_gray = clahe.apply(gray_img)
 
@@ -259,7 +255,6 @@ class OCRReaderPipeline:
         if is_full_prescription:
             resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
-            # Heavy-duty morphological matrix welding pass to merge fragmented pixels
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
             processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, kernel)
 
@@ -268,6 +263,18 @@ class OCRReaderPipeline:
 
             for contour in sorted_contours:
                 x, y, w, h = cv2.boundingRect(contour)
+
+                # ==========================================
+                # 🎯 FIX 1: SPATIAL HEURISTIC FILTERING
+                # ==========================================
+                y_center = y + (h / 2)
+                y_percentage = y_center / orig_h
+
+                # Ignore top 28% (Patient info) and bottom 20% (Doctor info)
+                if y_percentage < 0.28 or y_percentage > 0.80:
+                    continue
+                # ==========================================
+
                 if w < 25 or h < 10:
                     continue
 
@@ -293,8 +300,6 @@ class OCRReaderPipeline:
         if self.recognizer is not None and len(extracted_line_crops) > 0:
             for line_crop in extracted_line_crops:
                 tensor_input = self._preprocess_line_for_crnn(line_crop)
-
-                # Dynamic batch size calculation for hidden states initialization
                 current_batch_axis = tensor_input.size(0)
 
                 with torch.no_grad():
@@ -308,14 +313,24 @@ class OCRReaderPipeline:
                     preds = log_probs.argmax(dim=2).squeeze(0).cpu().numpy()
 
                 word_text = self.encoder.decode(preds).strip()
+
+                # ==========================================
+                # 🎯 FIX 2: KEYWORD & LENGTH FILTERING
+                # ==========================================
+                text_lower = word_text.lower()
+                med_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day", "a.d."]
+
                 if word_text:
-                    decoded_words_list.append(word_text)
+                    # Keep if it matches a known keyword OR is a sufficiently long word (likely medication)
+                    if any(kw in text_lower for kw in med_keywords) or len(word_text) >= 4:
+                        decoded_words_list.append(word_text)
+                # ==========================================
 
             ocr_text_output = " ".join(decoded_words_list)
         else:
-            ocr_text_output = "Amoxicillin 500mg"  # Production fallback placeholder if weights are running empty
+            ocr_text_output = "Amoxicillin 500mg"  # Fallback
 
-        # STEP 3: Routing Vector Computations (LightGBM vs Fallback Heuristics)
+        # STEP 3: Routing Vector Computations
         category_label = "Prescription/Symptom"
         confidence_score = 100.0
         pred_label = 0
@@ -330,7 +345,6 @@ class OCRReaderPipeline:
                 except Exception:
                     category_label = "Prescription/Symptom"
             else:
-                # 🎯 CLOUD HEURISTIC FALLBACK: Keyword extraction if pickle fails due to scikit-learn versioning
                 text_lower = ocr_text_output.lower()
                 if any(k in text_lower for k in ["report", "mg/dl", "hemoglobin", "wbc", "platelets", "urine"]):
                     category_label = "Lab Report"

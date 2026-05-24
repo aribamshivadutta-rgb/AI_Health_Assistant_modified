@@ -78,10 +78,11 @@ added (05/15/2026)
 2. Detector CNN, dataset from https://guillaumejaume.github.io/FUNSD/
 3. train_traffic_router.py, dataset from https://data.mendeley.com/datasets/dsb5r6vskg/3,https://www.kaggle.com/datasets/itachi9604/disease-symptom-description-dataset,https://www.kaggle.com/datasets/louiscia/transcription-samples-mtsamples
  to be added
- 1. get Crnn model to get higher accuracy
+ 1. get Crnn model to get higher accuracy (accuracy about 70%)
  2. fix u  -net to read piscription
- 3. add a way to mapp the medicine from document to the info
+ 3. add a way to mapp the medicine from document to the info (done)
  4. pdf file not loading
  5. improve chat functionality (optional)
  6. add a way to capture images from phone
+ 7. need to fix randomly getting disease info from medicine name
 
