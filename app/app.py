@@ -1,26 +1,29 @@
+import os
+import random
+import csv
+import sys
+import re
+import difflib
+import hashlib
+import uuid
+import subprocess
+from datetime import datetime
+import json
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 import torch.optim as optim
+
 import cv2
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-import os
-import random
-import streamlit as st
-import sys
 import joblib
-import re
-import difflib
-import csv
-import subprocess
-import hashlib
-import uuid
-from datetime import datetime
-from st_supabase_connection import SupabaseConnection
+from tqdm import tqdm
+import streamlit as st
 from pdf2image import convert_from_bytes
 from rapidfuzz import process, fuzz, distance
+from st_supabase_connection import SupabaseConnection
 
 # ====================================================================
 # BACKWARD COMPATIBILITY INJECTOR PATCH (SCI-KIT LEARN FIX)
@@ -43,7 +46,7 @@ except ImportError:
     MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. FIXED SELF-CORRECTING PATH MATRIX (FORCES SIDEBAR TO SAY TRUE)
+# 1. FIXED SELF-CORRECTING PATH MATRIX
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
@@ -57,7 +60,7 @@ if not IS_ONLINE_DEPLOYMENT:
     TRAIN_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\train_lgbm.py"
     MED_CRNN_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\MedicalCRNN_clean"
 else:
-    # 🎯 LINUX CLOUD SELF-CORRECTING PATH FINDER
+    # LINUX CLOUD SELF-CORRECTING PATH FINDER
     possible_roots = [
         CURRENT_SCRIPT_DIR,
         os.path.dirname(CURRENT_SCRIPT_DIR),
@@ -88,9 +91,12 @@ REQUESTS_FILE = os.path.join(TEMP_DIR, "unverified_diseases.csv")
 LEARNED_DATA_FILE = os.path.join(RAW_DIR, "learned_user_data.csv")
 
 DETECTOR_WEIGHTS = os.path.join(MODEL_DIR, "medical_detector.pth")
-CRNN_WEIGHTS = os.path.join(MODEL_DIR, "MedicalCRNN_v1.pth")
 TRAFFIC_ROUTER_WEIGHTS = os.path.join(MODEL_DIR, "MedicalTrafficRouter_v1.pkl")
 TRAFFIC_VECTORIZER_WEIGHTS = os.path.join(MODEL_DIR, "MedicalTrafficRouter_v1_vectorizer.pkl")
+
+# --- UPDATED PATHS FOR HIGH-ACCURACY RESIDUAL MODEL ---
+CRNN_WEIGHTS = os.path.join(MODEL_DIR, "MedicalCRNN_v2_Residual.pth")
+VOCAB_JSON = os.path.join(MODEL_DIR, "medical_vocab.json")
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(RAW_DIR, exist_ok=True)
@@ -113,16 +119,6 @@ MEDICAL_DICTIONARY = [
     "Losita", "Rivotril", "Econate", "Kacin", "bengel", "Omep", "Fougest",
     "RUPIN", "myolax", "Tenocab", "Radifil", "Povital", "Napa", "Voligel", "lactomore", "Don A"
 ]
-
-MEDICAL_EXPANSION_MAP = {
-    "FeSO4": "Ferrous Sulfate",
-    "Rx": "Prescription Header",
-    "once a day": "Once Daily (OD)",
-    "twice a day": "Twice Daily (BD)",
-    "Napdos": "Napdos",
-    "Losita": "Losita",
-    "Napa": "Napa"
-}
 
 CRNN_EXCEPTION_PATCH = {
     "povoex": "Napdos",
@@ -208,11 +204,14 @@ def verify_user_cloud(v_id, input_key):
 
 
 # ====================================================================
-# 4. FIXED & FULLY SYNCHRONIZED ARCHITECTURE BLOCK
+# 4. FIXED & FULLY SYNCHRONIZED ARCHITECTURE BLOCK (RESIDUAL)
 # ====================================================================
 class MedicalLabelEncoder:
-    def __init__(self):
-        self.chars = " %()-./012345678?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    def __init__(self, json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        self.chars = data['chars']
+        self.lexicon = set(data['lexicon'])
         self.char_to_num = {char: i + 1 for i, char in enumerate(self.chars)}
         self.num_to_char = {i + 1: char for i, char in enumerate(self.chars)}
 
@@ -228,31 +227,78 @@ class MedicalLabelEncoder:
         return len(self.chars) + 1
 
 
-class MedicalCRNN(nn.Module):
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        return self.relu(out)
+
+
+class MedicalResidualCRNN(nn.Module):
     def __init__(self, vocab_size):
-        super(MedicalCRNN, self).__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128), nn.ReLU(),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128), nn.ReLU(),
-            nn.MaxPool2d((2, 1))
+        super(MedicalResidualCRNN, self).__init__()
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(64), nn.ReLU(inplace=True)
         )
+        self.layer2 = ResidualBlock(64, 64, stride=1)
+        self.pool1 = nn.MaxPool2d(2)
+        self.layer3 = ResidualBlock(64, 128, stride=1)
+        self.layer4 = ResidualBlock(128, 128, stride=1)
+        self.pool2 = nn.MaxPool2d(2)
+        self.spatial_drop1 = nn.Dropout2d(p=0.2)
+        self.layer5 = ResidualBlock(128, 256, stride=1)
+        self.layer6 = ResidualBlock(256, 256, stride=1)
+        self.pool3 = nn.MaxPool2d((2, 1))
+        self.spatial_drop2 = nn.Dropout2d(p=0.2)
+        self.layer7 = nn.Sequential(
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(512), nn.ReLU(inplace=True)
+        )
+
+        self.pool4 = nn.MaxPool2d((2, 1))
+
         self.hidden_size = 256
-        self.num_layers = 2
-        self.rnn = nn.LSTM(input_size=1024, hidden_size=self.hidden_size, num_layers=self.num_layers,
-                           bidirectional=True, batch_first=True)
+        self.num_layers = 2  # 🟢 THE FIX IS HERE
+
+        # Set dropout to 0.0 for inference to get stable predictions
+        self.rnn = nn.LSTM(input_size=512 * 4, hidden_size=self.hidden_size, num_layers=self.num_layers,
+                           bidirectional=True, batch_first=True, dropout=0.0)
         self.fc = nn.Linear(self.hidden_size * 2, vocab_size)
 
     def forward(self, img_tensor, hx=None):
-        features = self.cnn(img_tensor)
-        b, c, h, w = features.size()
-        features = features.view(b, c * h, w).permute(0, 2, 1)
-        rnn_out, _ = self.rnn(features, hx)
+        x = self.layer1(img_tensor)
+        x = self.layer2(x)
+        x = self.pool1(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.pool2(x)
+        x = self.spatial_drop1(x)
+        x = self.layer5(x)
+        x = self.layer6(x)
+        x = self.pool3(x)
+        x = self.spatial_drop2(x)
+        x = self.layer7(x)
+        x = self.pool4(x)
+        b, c, h, w = x.size()
+        x = x.view(b, c * h, w).permute(0, 2, 1)
+        rnn_out, _ = self.rnn(x, hx)
         logits = self.fc(rnn_out)
         return logits.log_softmax(2)
 
@@ -262,16 +308,15 @@ class OCRReaderPipeline:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.detector = None
         self.text_recognizer = None
-        self.encoder = MedicalLabelEncoder()
 
-        label_xlsx = os.path.join(MED_CRNN_DIR, "Train_Label.xlsx")
-        label_csv = os.path.join(MED_CRNN_DIR, "Train_Label.csv")
-        if os.path.exists(label_xlsx):
-            self.medical_dictionary = pd.read_excel(label_xlsx)['Text'].dropna().astype(str).unique().tolist()
-        elif os.path.exists(label_csv):
-            self.medical_dictionary = pd.read_csv(label_csv)['Text'].dropna().astype(str).unique().tolist()
+        # Initialize encoder from the fast JSON file
+        if os.path.exists(VOCAB_JSON):
+            self.encoder = MedicalLabelEncoder(VOCAB_JSON)
+            self.medical_dictionary = list(self.encoder.lexicon)
         else:
+            st.warning(f"Vocabulary JSON not found at {VOCAB_JSON}. Falling back to default dictionary.")
             self.medical_dictionary = MEDICAL_DICTIONARY
+            self.encoder = None
 
         self.load_models()
 
@@ -281,24 +326,23 @@ class OCRReaderPipeline:
             self.detector.load_state_dict(torch.load(DETECTOR_WEIGHTS, map_location=self.device))
             self.detector.eval()
 
-        self.text_recognizer = MedicalCRNN(self.encoder.vocab_size).to(self.device)
-        if os.path.exists(CRNN_WEIGHTS):
-            raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
+        if self.encoder is not None:
+            self.text_recognizer = MedicalResidualCRNN(self.encoder.vocab_size).to(self.device)
+            if os.path.exists(CRNN_WEIGHTS):
+                raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
+                sanitized_state_dict = {}
+                for k, v in raw_state_dict.items():
+                    new_key = k
+                    if new_key.startswith("module."):
+                        new_key = new_key.replace("module.", "")
+                    if new_key.startswith("model."):
+                        new_key = new_key.replace("model.", "")
+                    if new_key.startswith("text_recognizer."):
+                        new_key = new_key.replace("text_recognizer.", "")
+                    sanitized_state_dict[new_key] = v
 
-            # 🎯 DYNAMIC STATE_DICT DICTIONARY INTERCEPTOR LAYER
-            sanitized_state_dict = {}
-            for k, v in raw_state_dict.items():
-                new_key = k
-                if new_key.startswith("module."):
-                    new_key = new_key.replace("module.", "")
-                if new_key.startswith("model."):
-                    new_key = new_key.replace("model.", "")
-                if new_key.startswith("text_recognizer."):
-                    new_key = new_key.replace("text_recognizer.", "")
-                sanitized_state_dict[new_key] = v
-
-            self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
-        self.text_recognizer.eval()
+                self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
+            self.text_recognizer.eval()
 
     def _split_lines_by_projection(self, block_crop):
         if len(block_crop.shape) == 3:
@@ -325,9 +369,9 @@ class OCRReaderPipeline:
                 in_line = False
                 end_y = min(block_crop.shape[0], idx + 2)
                 if (end_y - start_y) > 5:
-                    line_crops.append(block_crop[start_y:end_y, :])
+                    line_crops.append(block_crop[start_y:end_y, :].copy())
         if in_line:
-            line_crops.append(block_crop[start_y:, :])
+            line_crops.append(block_crop[start_y:, :].copy())
         return line_crops if len(line_crops) > 0 else [block_crop]
 
     def process_image(self, image_input, true_label=None, preset_mode="High-Contrast Document (Zero-Centered)"):
@@ -358,14 +402,11 @@ class OCRReaderPipeline:
             raise ValueError("Corrupt file tensor element passed.")
 
         orig_h, orig_w = raw_img.shape[:2]
-
         is_full_prescription = True
         aspect_ratio = orig_w / float(orig_h)
         if aspect_ratio > 2.0 or orig_h < 150:
             is_full_prescription = False
 
-        # 🎯 ADVANCED ADAPTIVE CONTRAST PATCH (CLAHE ENHANCEMENT)
-        # Re-injects the digital glasses so the U-Net never goes blind under low illumination parameters
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         equalized_raw_img = clahe.apply(raw_img)
 
@@ -425,7 +466,7 @@ class OCRReaderPipeline:
                 for (x, y, cw, ch) in line_bounding_boxes:
                     pad_y1, pad_y2 = max(0, y - 4), min(orig_h, y + ch + 4)
                     pad_x1, pad_x2 = max(0, x - 4), min(orig_w, x + cw + 4)
-                    block_crop = equalized_raw_img[pad_y1:pad_y2, pad_x1:pad_x2]
+                    block_crop = equalized_raw_img[pad_y1:pad_y2, pad_x1:pad_x2].copy()
                     if block_crop.size == 0:
                         continue
                     tokenized_lines = self._split_lines_by_projection(block_crop)
@@ -443,7 +484,7 @@ class OCRReaderPipeline:
             st.session_state.line_diagnostics = []
 
             for idx, crop in enumerate(extracted_line_crops):
-                if crop.size == 0 or crop.shape[0] < 2 or crop.shape[1] < 2:
+                if crop is None or crop.size == 0 or crop.shape[0] < 3 or crop.shape[1] < 3:
                     continue
 
                 target_w, target_h = 256, 64
@@ -459,10 +500,13 @@ class OCRReaderPipeline:
                     nw = target_w
                     nh = int(h_crop * scale)
 
-                nw = max(1, nw)
-                nh = max(1, nh)
+                nw = max(4, nw)
+                nh = max(4, nh)
 
-                resized_crop = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR)
+                try:
+                    resized_crop = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR)
+                except Exception:
+                    continue
 
                 start_x = 5
                 start_y = max(0, (target_h - nh) // 2)
