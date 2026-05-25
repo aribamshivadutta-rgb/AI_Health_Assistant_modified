@@ -58,7 +58,6 @@ if not IS_ONLINE_DEPLOYMENT:
     TEMP_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\temp"
     PREPROCESS_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\chat_bot_preprocessing.py"
     TRAIN_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\train_lgbm.py"
-    MED_CRNN_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\MedicalCRNN_clean"
 else:
     # LINUX CLOUD SELF-CORRECTING PATH FINDER
     possible_roots = [
@@ -80,7 +79,6 @@ else:
     TEMP_DIR = os.path.join(resolved_root, "data", "temp")
     PREPROCESS_SCRIPT = os.path.join(resolved_root, "scripts", "chat_bot_preprocessing.py")
     TRAIN_SCRIPT = os.path.join(resolved_root, "scripts", "train_lgbm.py")
-    MED_CRNN_DIR = os.path.join(resolved_root, "data", "clean", "MedicalCRNN_clean")
 
 # Re-link matching child file tracks
 MODEL_PATH = os.path.join(MODEL_DIR, "lgbm_model_clean.pkl")
@@ -91,34 +89,34 @@ REQUESTS_FILE = os.path.join(TEMP_DIR, "unverified_diseases.csv")
 LEARNED_DATA_FILE = os.path.join(RAW_DIR, "learned_user_data.csv")
 
 DETECTOR_WEIGHTS = os.path.join(MODEL_DIR, "medical_detector.pth")
-TRAFFIC_ROUTER_WEIGHTS = os.path.join(MODEL_DIR, "MedicalTrafficRouter_v1.pkl")
-TRAFFIC_VECTORIZER_WEIGHTS = os.path.join(MODEL_DIR, "MedicalTrafficRouter_v1_vectorizer.pkl")
-
-# --- UPDATED PATHS FOR HIGH-ACCURACY RESIDUAL MODEL & DATABASE ---
 CRNN_WEIGHTS = os.path.join(MODEL_DIR, "MedicalCRNN_v2_Residual.pth")
 VOCAB_JSON = os.path.join(MODEL_DIR, "medical_vocab.json")
-DB_PATH = os.path.join(MED_CRNN_DIR, "Final_Compiled_Medicine_Database.xlsx")
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
+# --- AUTO-LOCATOR: Find the database anywhere in the project ---
+def find_database_dynamically():
+    for root_dir, _, files in os.walk(resolved_root):
+        for file in files:
+            if "Final_Compiled_Medicine_Database" in file:
+                return os.path.join(root_dir, file)
+    return None
+
+
+DB_PATH = find_database_dynamically()
+
+
 # ----------------- DATABASE UTILITY FUNCTIONS -----------------
 def load_medicine_database(db_path):
-    # CLOUD FAILSAFE: If the file was uploaded without an extension, adapt to it.
-    fallback_path = db_path.replace(".xlsx", "")
-    actual_path = db_path
-
-    if not os.path.exists(db_path) and os.path.exists(fallback_path):
-        actual_path = fallback_path
-
-    if not os.path.exists(actual_path):
+    if db_path is None or not os.path.exists(db_path):
         return None
 
     try:
         # Force the openpyxl engine in case the file extension is missing
-        df = pd.read_excel(actual_path, engine='openpyxl')
+        df = pd.read_excel(db_path, engine='openpyxl')
         search_column = 'Medicine' if 'Medicine' in df.columns else df.columns[0]
         df['lookup_key'] = df[search_column].astype(str).str.strip().str.lower()
 
@@ -736,9 +734,8 @@ def main():
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
 
         # Temporary Database Debug Text
-        if not st.session_state.db_lookup and os.path.exists(MED_CRNN_DIR):
-            st.caption("Debugging CRNN Folder Contents:")
-            st.caption(str(os.listdir(MED_CRNN_DIR)))
+        if not st.session_state.db_lookup:
+            st.caption(f"Auto-Locator Path Attempted: {DB_PATH}")
 
         st.divider()
 
