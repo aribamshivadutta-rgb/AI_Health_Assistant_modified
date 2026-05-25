@@ -6,6 +6,7 @@ import joblib
 import cv2
 import numpy as np
 import pandas as pd
+from rapidfuzz import process, fuzz  # Added for Semantic Gatekeeper
 
 # Dynamically anchor directory structure relative to this file's position
 CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +17,17 @@ try:
     from scripts.medical_detector_cnn import MedicalDetectorCNN  # Your U-Net Architecture
 except ImportError:
     from medical_detector_cnn import MedicalDetectorCNN
+
+# Medical Dictionary for Standalone Fuzzy Matching
+MEDICAL_DICTIONARY = [
+    "Rx", "Stable", "Tablet", "Capsule", "Amoxicillin", "Paracetamol",
+    "Azithromycin", "Metformin", "Ibuprofen", "Anacin", "Flamex",
+    "Syrup", "Injection", "Pantoprazole", "Vitamin-C", "Cetirizine",
+    "FeSO4", "Ascorbic Acid", "once a day", "twice a day", "Napdos",
+    "Losita", "Rivotril", "Econate", "Kacin", "bengel", "Omep", "Fougest",
+    "RUPIN", "myolax", "Tenocab", "Radifil", "Povital", "Napa", "Voligel", "lactomore", "Don A",
+    "Calbo-D"
+]
 
 
 # ====================================================================
@@ -116,6 +128,7 @@ class OCRReaderPipeline:
                 self.vectorizer = joblib.load(vectorizer_path)
                 print("🟢 Traffic Router models unpickled successfully.")
             except (AttributeError, ValueError, KeyError) as e:
+                # CLOUD SAFEGUARD: Gracefully catches version differences between scikit-learn 1.7.2 vs 1.4.2
                 print(f"⚠️ Cloud Environment Version Mismatch: {e}")
                 print("🔄 Activating adaptive fallback heuristics routing mode to bypass serialization conflict.")
                 self.router = "FALLBACK_MODE"
@@ -188,6 +201,7 @@ class OCRReaderPipeline:
         target_w, target_h = 256, 64
         padded_canvas = np.ones((target_h, target_w), dtype=np.uint8) * 255
 
+        # Calculate target dimensions using safe float conversions
         scale = target_h / float(h_img)
         nw = int(w_img * scale)
         nh = target_h
@@ -197,6 +211,7 @@ class OCRReaderPipeline:
             nw = target_w
             nh = int(h_img * scale)
 
+        # BULLETPROOF GEOMETRIC BOUNDS PROTECTION
         nw = max(1, nw)
         nh = max(1, nh)
 
@@ -212,32 +227,20 @@ class OCRReaderPipeline:
         tensor_img = (tensor_img - 0.5) / 0.5
         return torch.from_numpy(tensor_img).unsqueeze(0).unsqueeze(0).float().to(self.device)
 
-    def process_image(self, image_input, true_label=None):
+    # ----------------------------------------------------------------
+    # HUMAN-IN-THE-LOOP (HITL) SUPPORT METHODS
+    # ----------------------------------------------------------------
+    def detect_regions(self, image_input):
+        """Step 1: U-Net proposes bounding boxes without strict spatial filtering"""
         if isinstance(image_input, str):
             raw_img = cv2.imread(image_input)
         else:
-            try:
-                image_input.seek(0)
-                file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-                raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                image_input.seek(0)
-            except AttributeError:
-                file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-                raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
-        if raw_img is None:
-            raise ValueError("Pipeline error: Decoded image buffer array is empty.")
+            file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
+            raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            image_input.seek(0)
 
         orig_h, orig_w = raw_img.shape[:2]
         gray_img = cv2.cvtColor(raw_img, cv2.COLOR_BGR2GRAY)
-
-        is_full_prescription = True
-        aspect_ratio = orig_w / float(orig_h)
-        if aspect_ratio > 2.0 or orig_h < 150:
-            is_full_prescription = False
-            print(f"⚡ Pipeline Gate: Single-word crop validated ({orig_w}x{orig_h}). Bypassing splitter.")
-
-        # FORCE VISION VIA ADAPTIVE HISTOGRAM EQUALIZATION (CLAHE)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         equalized_gray = clahe.apply(gray_img)
 
@@ -245,52 +248,94 @@ class OCRReaderPipeline:
         img_tensor = torch.from_numpy(img_input).unsqueeze(0).unsqueeze(0).float().to(self.device)
 
         mask = np.zeros((512, 512), dtype=np.uint8)
-        if self.detector is not None and is_full_prescription:
+        if self.detector is not None:
             with torch.no_grad():
                 mask_output = self.detector(img_tensor)
                 mask = (mask_output.squeeze().cpu().numpy() > 0.5).astype(np.uint8) * 255
 
+        resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+        processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        line_bounding_boxes = []
+
+        # 🎯 Architectural Change: We grab ALL text blocks, no Y-axis filtering
+        for ctr in sorted(contours, key=lambda c: cv2.boundingRect(c)[1]):
+            xc, yc, wc, hc = cv2.boundingRect(ctr)
+            if wc > 25 and hc > 10:
+                line_bounding_boxes.append((xc, yc, wc, hc))
+
+        return raw_img, line_bounding_boxes, mask
+
+    def recognize_crop(self, block_crop):
+        """Step 2: CRNN + Semantic Gatekeeper on a specific crop"""
+        tokenized_lines = self._split_lines_by_projection(block_crop)
+        decoded_words_list = []
+
+        if self.recognizer is not None:
+            for line_crop in tokenized_lines:
+                tensor_input = self._preprocess_line_for_crnn(line_crop)
+                current_batch_axis = tensor_input.size(0)
+
+                with torch.no_grad():
+                    num_dirs = 2
+                    h0 = torch.zeros(self.recognizer.num_layers * num_dirs, current_batch_axis,
+                                     self.recognizer.hidden_size).to(self.device)
+                    c0 = torch.zeros(self.recognizer.num_layers * num_dirs, current_batch_axis,
+                                     self.recognizer.hidden_size).to(self.device)
+
+                    log_probs = self.recognizer(tensor_input, (h0, c0))
+                    preds = log_probs.argmax(dim=2).squeeze(0).cpu().numpy()
+
+                word_text = self.encoder.decode(preds).strip()
+
+                # 🎯 SEMANTIC GATEKEEPER
+                text_lower = word_text.lower()
+                pharma_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
+                                   "a.d.", "calbo", "losita"]
+                noise_keywords = ["dr.", "mbbs", "clinic", "fever", "headache", "bodyache", "date", "age", "sex", "c/o",
+                                  "drink", "rest", "since"]
+
+                is_medicine = False
+
+                if any(kw in text_lower for kw in pharma_keywords):
+                    is_medicine = True
+                else:
+                    match = process.extractOne(word_text, MEDICAL_DICTIONARY, scorer=fuzz.WRatio)
+                    if match and match[1] >= 80.0:
+                        is_medicine = True
+
+                if any(noise in text_lower for noise in noise_keywords):
+                    is_medicine = False
+
+                if is_medicine and len(word_text) > 2:
+                    decoded_words_list.append(word_text)
+
+        return " ".join(decoded_words_list)
+
+    # ----------------------------------------------------------------
+    # AUTONOMOUS PIPELINE (For batch testing / direct runs)
+    # ----------------------------------------------------------------
+    def process_image(self, image_input, true_label=None):
+        """Runs the entire pipeline autonomously using Semantic Gatekeeper"""
+
+        # 1. Proposal Phase
+        raw_img, bounding_boxes, mask = self.detect_regions(image_input)
+
+        is_full_prescription = True
+        orig_h, orig_w = raw_img.shape[:2]
+        if orig_w / float(orig_h) > 2.0 or orig_h < 150:
+            is_full_prescription = False
+
         extracted_line_crops = []
-
         if is_full_prescription:
-            resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
-            processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, kernel)
-
-            contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            sorted_contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
-
-            for contour in sorted_contours:
-                x, y, w, h = cv2.boundingRect(contour)
-
-                # ==========================================
-                # 🎯 FIX 1: SPATIAL HEURISTIC FILTERING
-                # ==========================================
-                y_center = y + (h / 2)
-                y_percentage = y_center / orig_h
-
-                # Ignore top 28% (Patient info) and bottom 20% (Doctor info)
-                if y_percentage < 0.28 or y_percentage > 0.80:
-                    continue
-                # ==========================================
-
-                if w < 25 or h < 10:
-                    continue
-
-                comp_ratio = w / float(h)
-                if 0.8 <= comp_ratio <= 1.3 and w < 140:
-                    continue
-
+            for (x, y, w, h) in bounding_boxes:
                 padding = 6
-                x_start = max(0, x - padding)
-                y_start = max(0, y - padding)
-                x_end = min(orig_w, x + w + padding)
-                y_end = min(orig_h, y + h + padding)
-
+                x_start, y_start = max(0, x - padding), max(0, y - padding)
+                x_end, y_end = min(orig_w, x + w + padding), min(orig_h, y + h + padding)
                 block_crop = raw_img[y_start:y_end, x_start:x_end]
-                tokenized_lines = self._split_lines_by_projection(block_crop)
-                extracted_line_crops.extend(tokenized_lines)
+                extracted_line_crops.extend(self._split_lines_by_projection(block_crop))
         else:
             extracted_line_crops.append(raw_img)
 
@@ -308,29 +353,41 @@ class OCRReaderPipeline:
                                      self.recognizer.hidden_size).to(self.device)
                     c0 = torch.zeros(self.recognizer.num_layers * num_dirs, current_batch_axis,
                                      self.recognizer.hidden_size).to(self.device)
-
                     log_probs = self.recognizer(tensor_input, (h0, c0))
                     preds = log_probs.argmax(dim=2).squeeze(0).cpu().numpy()
 
                 word_text = self.encoder.decode(preds).strip()
 
                 # ==========================================
-                # 🎯 FIX 2: KEYWORD & LENGTH FILTERING
+                # 🎯 SEMANTIC GATEKEEPER (Autonomous check)
                 # ==========================================
                 text_lower = word_text.lower()
-                med_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day", "a.d."]
+                pharma_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
+                                   "a.d.", "calbo", "losita"]
+                noise_keywords = ["dr.", "mbbs", "clinic", "fever", "headache", "bodyache", "date", "age", "sex", "c/o",
+                                  "drink", "rest", "since"]
 
-                if word_text:
-                    # Keep if it matches a known keyword OR is a sufficiently long word (likely medication)
-                    if any(kw in text_lower for kw in med_keywords) or len(word_text) >= 4:
-                        decoded_words_list.append(word_text)
+                is_medicine = False
+
+                if any(kw in text_lower for kw in pharma_keywords):
+                    is_medicine = True
+                else:
+                    match = process.extractOne(word_text, MEDICAL_DICTIONARY, scorer=fuzz.WRatio)
+                    if match and match[1] >= 80.0:
+                        is_medicine = True
+
+                if any(noise in text_lower for noise in noise_keywords):
+                    is_medicine = False
+
+                if is_medicine and len(word_text) > 2:
+                    decoded_words_list.append(word_text)
                 # ==========================================
 
             ocr_text_output = " ".join(decoded_words_list)
         else:
-            ocr_text_output = "Amoxicillin 500mg"  # Fallback
+            ocr_text_output = "Amoxicillin 500mg"  # Production fallback placeholder if weights are running empty
 
-        # STEP 3: Routing Vector Computations
+        # STEP 3: Routing Vector Computations (LightGBM vs Fallback Heuristics)
         category_label = "Prescription/Symptom"
         confidence_score = 100.0
         pred_label = 0
