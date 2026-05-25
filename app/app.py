@@ -52,6 +52,7 @@ IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\U
 
 if not IS_ONLINE_DEPLOYMENT:
     # Baseline Windows Local Path Setup
+    resolved_root = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System"  # <--- FIX: Added for local Auto-Locator
     MODEL_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\models"
     DATA_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\chat_bot_clean"
     RAW_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\raw"
@@ -99,6 +100,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # --- AUTO-LOCATOR: Find the database anywhere in the project ---
 def find_database_dynamically():
+    # Use resolved_root directly since it is now safely defined in both local and cloud modes
     for root_dir, _, files in os.walk(resolved_root):
         for file in files:
             if "Final_Compiled_Medicine_Database" in file:
