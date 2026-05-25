@@ -112,21 +112,28 @@ DB_PATH = find_database_dynamically()
 # ----------------- DATABASE UTILITY FUNCTIONS -----------------
 def load_medicine_database(db_path):
     if db_path is None or not os.path.exists(db_path):
-        return None
+        return None, "File not found by Auto-Locator."
 
     try:
-        # Force the openpyxl engine in case the file extension is missing
-        df = pd.read_excel(db_path, engine='openpyxl')
+        # Try reading it strictly as an Excel file first
+        try:
+            df = pd.read_excel(db_path, engine='openpyxl')
+        except Exception as e_xl:
+            # If it fails, try reading it as a CSV (in case the format was altered)
+            try:
+                df = pd.read_csv(db_path, low_memory=False)
+            except Exception as e_csv:
+                return None, f"Excel Error: {e_xl} | CSV Error: {e_csv}"
+
         search_column = 'Medicine' if 'Medicine' in df.columns else df.columns[0]
         df['lookup_key'] = df[search_column].astype(str).str.strip().str.lower()
 
         # Drop duplicate medicines so the index is perfectly unique
         df = df.drop_duplicates(subset=['lookup_key'], keep='first')
 
-        return df.set_index('lookup_key').dropna(axis=1, how='all').to_dict(orient='index')
+        return df.set_index('lookup_key').dropna(axis=1, how='all').to_dict(orient='index'), "Success"
     except Exception as e:
-        print(f"Error reading database: {str(e)}")
-        return None
+        return None, f"Processing Error: {str(e)}"
 
 
 def fetch_medicine_details_fast(extracted_name, lookup_dict):
@@ -708,7 +715,9 @@ def main():
 
     # Load the database globally into session state ONCE at startup
     if 'db_lookup' not in st.session_state:
-        st.session_state.db_lookup = load_medicine_database(DB_PATH)
+        db_data, db_msg = load_medicine_database(DB_PATH)
+        st.session_state.db_lookup = db_data
+        st.session_state.db_msg = db_msg
 
     if "last_processed_file_hash" not in st.session_state:
         st.session_state.last_processed_file_hash = None
@@ -733,9 +742,10 @@ def main():
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
 
-        # Temporary Database Debug Text
+        # Exact Error Reporter
         if not st.session_state.db_lookup:
-            st.caption(f"Auto-Locator Path Attempted: {DB_PATH}")
+            st.caption(f"Path Found: {DB_PATH}")
+            st.error(f"Crash Log: {st.session_state.get('db_msg', 'Unknown Error')}")
 
         st.divider()
 
