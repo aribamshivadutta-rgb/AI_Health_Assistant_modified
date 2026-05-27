@@ -141,8 +141,7 @@ CRNN_EXCEPTION_PATCH = {
     "ter m": "Losita",
     "term": "Losita",
     "povoex": "Napdos",
-    "pobccv": "Metformin",
-    "calbo d": "Calbo-D"
+    "pobccv": "Metformin"
 }
 
 # ====================================================================
@@ -325,10 +324,14 @@ class OCRReaderPipeline:
 
     def _split_lines_by_projection(self, block_crop):
         gray_crop = cv2.cvtColor(block_crop, cv2.COLOR_BGR2GRAY) if len(block_crop.shape) == 3 else block_crop.copy()
+
+        # Pass 1: Clean background illumination noise patterns dynamically
         binary_cleaned = cv2.adaptiveThreshold(
             gray_crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 15, 9
         )
+
+        # Pass 2: Continuous row density evaluation
         horizontal_sum = np.sum(binary_cleaned, axis=1)
         line_crops, in_line, start_y = [], False, 0
         threshold_density = max(10, int(np.max(horizontal_sum) * 0.03))
@@ -343,6 +346,7 @@ class OCRReaderPipeline:
 
         if not line_crops or len(line_crops) == 0:
             return [gray_crop]
+
         return line_crops
 
     def recognize_crop(self, block_crop):
@@ -512,6 +516,9 @@ def main():
     if 'ocr_pipeline' not in st.session_state: st.session_state.ocr_pipeline = OCRReaderPipeline()
     if 'auth' not in st.session_state: st.session_state.auth = False
 
+    # State flags to gate camera hardware activation
+    if 'camera_active' not in st.session_state: st.session_state.camera_active = False
+
     if 'db_lookup' not in st.session_state:
         db_data, db_msg = load_medicine_database(DB_PATH)
         st.session_state.db_lookup, st.session_state.db_msg = db_data, db_msg
@@ -524,7 +531,6 @@ def main():
     if "cached_mask_preview" not in st.session_state: st.session_state.cached_mask_preview = None
     if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
     if "needs_manual_crop" not in st.session_state: st.session_state.needs_manual_crop = False
-    if 'camera_active' not in st.session_state: st.session_state.camera_active = False
 
     v_id = get_visitor_id()
 
@@ -570,23 +576,62 @@ def main():
             st.divider()
             st.subheader("Clinical Data Capture")
 
-            file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
+            capture_tabs = st.tabs(["📸 Live Camera", "📁 File Upload"])
+            uploaded_file = None
 
-            st.markdown("<p style='text-align: center; margin: 10px 0;'><b>— OR —</b></p>", unsafe_allow_html=True)
+            with capture_tabs[0]:
+                st.markdown("""
+                <style>
+                [data-testid="stCameraInput"] {
+                    position: relative;
+                }
+                [data-testid="stCameraInput"] video {
+                    position: relative;
+                }
+                [data-testid="stCameraInput"]:has(video)::before {
+                    content: 'ALIGN MEDICINE NAME HERE';
+                    position: absolute;
+                    top: 25%;
+                    left: 10%;
+                    width: 80%;
+                    height: 25%;
+                    border: 3px dashed #00FF00;
+                    color: #00FF00;
+                    display: flex;
+                    align-items: flex-end;
+                    justify-content: center;
+                    padding-bottom: 5px;
+                    font-weight: bold;
+                    z-index: 99;
+                    pointer-events: none;
+                    background-color: rgba(0, 255, 0, 0.1);
+                }
+                </style>
+                """, unsafe_allow_html=True)
 
-            camera_photo = None
-            if not st.session_state.camera_active:
-                if st.button("📸 Open Live Camera", use_container_width=True):
-                    st.session_state.camera_active = True
-                    st.rerun()
-            else:
-                if st.button("❌ Close Camera", use_container_width=True):
-                    st.session_state.camera_active = False
-                    st.rerun()
+                # Render activation workflow gate to keep camera dormant by default
+                if not st.session_state.camera_active:
+                    st.caption("Scan handwritten item names from mobile device cameras directly.")
+                    if st.button("🎥 Start Live Scanner App", use_container_width=True):
+                        st.session_state.camera_active = True
+                        st.rerun()
+                else:
+                    st.info(
+                        "💡 **Camera Access Required:** Click **Allow** inside the popup near your browser's address bar to start the hardware layout feed.")
+                    if st.button("❌ Turn Off Scanner Feed", type="secondary"):
+                        st.session_state.camera_active = False
+                        st.rerun()
 
-                camera_photo = st.camera_input("Capture Medicine")
+                    camera_photo = st.camera_input("Live Scanner")
+                    if camera_photo:
+                        uploaded_file = camera_photo
+                        # Auto-shut down camera hardware trace loop once image bytes hit the cache matrix
+                        st.session_state.camera_active = False
 
-            uploaded_file = camera_photo if camera_photo else file_upload
+            with capture_tabs[1]:
+                file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
+                if file_upload:
+                    uploaded_file = file_upload
 
             if uploaded_file is not None:
                 file_bytes = uploaded_file.getvalue()
@@ -606,36 +651,30 @@ def main():
                         cv2.THRESH_BINARY, 41, 15
                     )
 
-                    # --- FIXED IMAGE ROUTING ENGINE TRACKS ---
-                    # Phone photos are large layout feeds. Force manual crop mapping bypass.
-                    if camera_photo is not None:
-                        st.session_state.needs_manual_crop = True
-                        st.session_state.cached_mask_preview = cv2.resize(raw_img, (512, 512))
-                    else:
-                        if st.session_state.ocr_pipeline.is_pre_cropped(raw_img):
-                            st.info("⚡ Pre-cropped medicine detected. Auto-extracting...")
-                            with st.spinner("Analyzing text..."):
-                                ocr_text, line_diags = st.session_state.ocr_pipeline.recognize_crop(raw_img)
-                                st.session_state.line_diagnostics = line_diags
+                    if st.session_state.ocr_pipeline.is_pre_cropped(raw_img):
+                        st.info("⚡ Pre-cropped medicine detected. Auto-extracting...")
+                        with st.spinner("Analyzing text..."):
+                            ocr_text, line_diags = st.session_state.ocr_pipeline.recognize_crop(raw_img)
+                            st.session_state.line_diagnostics = line_diags
 
-                                if ocr_text.strip():
-                                    st.session_state.messages.append(
-                                        {"role": "user", "content": f"📋 *[Auto-Extraction]:*\n{ocr_text}"})
-                                    response = process_extraction_result(ocr_text, st.session_state.db_lookup)
-                                    st.session_state.messages.append({"role": "assistant", "content": response})
-                                else:
-                                    st.warning("No valid pharmaceutical text found in crop.")
-                        else:
-                            st.warning("🔍 Complex layout detected. Manual Isolation Required.")
-                            with st.spinner("Preparing interactive cropper..."):
-                                _, _, mask = st.session_state.ocr_pipeline.detect_regions(raw_img)
-                                st.session_state.cached_mask_preview = mask
-                                st.session_state.needs_manual_crop = True
+                            if ocr_text.strip():
+                                st.session_state.messages.append(
+                                    {"role": "user", "content": f"📋 *[Auto-Extraction]:*\n{ocr_text}"})
+                                response = process_extraction_result(ocr_text, st.session_state.db_lookup)
+                                st.session_state.messages.append({"role": "assistant", "content": response})
+                            else:
+                                st.warning("No valid pharmaceutical text found in crop.")
+                    else:
+                        st.warning("🔍 Complex layout detected. Manual Isolation Required.")
+                        with st.spinner("Preparing interactive cropper..."):
+                            _, _, mask = st.session_state.ocr_pipeline.detect_regions(raw_img)
+                            st.session_state.cached_mask_preview = mask
+                            st.session_state.needs_manual_crop = True
 
                 if st.session_state.get('needs_manual_crop', False):
                     st.divider()
                     st.subheader("🎯 Isolate Medication Area")
-                    st.caption("Drag the box over the text and adjust the boundaries.")
+                    st.caption("Drag the box to move it, and pull the corners to resize.")
 
                     with st.container():
                         uploaded_file.seek(0)
@@ -690,7 +729,7 @@ def main():
 
                 with tab_mask:
                     if st.session_state.cached_mask_preview is not None:
-                        st.image(st.session_state.cached_mask_preview, caption="Raw Image Target Matrix")
+                        st.image(st.session_state.cached_mask_preview, caption="Raw Segmentation Mask")
                     else:
                         st.caption("Mask bypassed (Auto-crop detected).")
 
