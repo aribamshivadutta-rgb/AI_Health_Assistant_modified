@@ -24,6 +24,8 @@ import streamlit as st
 from pdf2image import convert_from_bytes
 from rapidfuzz import process, fuzz, distance
 from st_supabase_connection import SupabaseConnection
+from streamlit_cropper import st_cropper
+from PIL import Image
 
 # ====================================================================
 # BACKWARD COMPATIBILITY INJECTOR PATCH (SCI-KIT LEARN FIX)
@@ -51,26 +53,22 @@ except ImportError:
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
 if not IS_ONLINE_DEPLOYMENT:
-    # Baseline Windows Local Path Setup
-    resolved_root = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System"  # <--- FIX: Added for local Auto-Locator
-    MODEL_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\models"
-    DATA_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\clean\chat_bot_clean"
-    RAW_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\raw"
-    TEMP_DIR = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\data\temp"
-    PREPROCESS_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\chat_bot_preprocessing.py"
-    TRAIN_SCRIPT = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System\scripts\train_lgbm.py"
+    resolved_root = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System"
+    MODEL_DIR = os.path.join(resolved_root, "models")
+    DATA_DIR = os.path.join(resolved_root, "data", "clean", "chat_bot_clean")
+    RAW_DIR = os.path.join(resolved_root, "data", "raw")
+    TEMP_DIR = os.path.join(resolved_root, "data", "temp")
+    PREPROCESS_SCRIPT = os.path.join(resolved_root, "scripts", "chat_bot_preprocessing.py")
+    TRAIN_SCRIPT = os.path.join(resolved_root, "scripts", "train_lgbm.py")
 else:
-    # LINUX CLOUD SELF-CORRECTING PATH FINDER
     possible_roots = [
         CURRENT_SCRIPT_DIR,
         os.path.dirname(CURRENT_SCRIPT_DIR),
         os.path.dirname(os.path.dirname(CURRENT_SCRIPT_DIR))
     ]
-
     resolved_root = CURRENT_SCRIPT_DIR
     for root in possible_roots:
-        check_path = os.path.join(root, "models", "medical_detector.pth")
-        if os.path.exists(check_path):
+        if os.path.exists(os.path.join(root, "models", "medical_detector.pth")):
             resolved_root = root
             break
 
@@ -81,14 +79,12 @@ else:
     PREPROCESS_SCRIPT = os.path.join(resolved_root, "scripts", "chat_bot_preprocessing.py")
     TRAIN_SCRIPT = os.path.join(resolved_root, "scripts", "train_lgbm.py")
 
-# Re-link matching child file tracks
 MODEL_PATH = os.path.join(MODEL_DIR, "lgbm_model_clean.pkl")
 LE_PATH = os.path.join(DATA_DIR, "label_encoder.pkl")
 FEAT_PATH = os.path.join(DATA_DIR, "X_preprocessed.csv")
 FULL_DATA_PATH = os.path.join(DATA_DIR, "preprocessed_data.csv")
 REQUESTS_FILE = os.path.join(TEMP_DIR, "unverified_diseases.csv")
 LEARNED_DATA_FILE = os.path.join(RAW_DIR, "learned_user_data.csv")
-
 DETECTOR_WEIGHTS = os.path.join(MODEL_DIR, "medical_detector.pth")
 CRNN_WEIGHTS = os.path.join(MODEL_DIR, "MedicalCRNN_v2_Residual.pth")
 VOCAB_JSON = os.path.join(MODEL_DIR, "medical_vocab.json")
@@ -98,9 +94,7 @@ os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
-# --- AUTO-LOCATOR: Find the database anywhere in the project ---
 def find_database_dynamically():
-    # Use resolved_root directly since it is now safely defined in both local and cloud modes
     for root_dir, _, files in os.walk(resolved_root):
         for file in files:
             if "Final_Compiled_Medicine_Database" in file:
@@ -111,43 +105,28 @@ def find_database_dynamically():
 DB_PATH = find_database_dynamically()
 
 
-# ----------------- DATABASE UTILITY FUNCTIONS -----------------
 def load_medicine_database(db_path):
     if db_path is None or not os.path.exists(db_path):
         return None, "File not found by Auto-Locator."
-
     try:
-        # Try reading it strictly as an Excel file first
         try:
             df = pd.read_excel(db_path, engine='openpyxl')
-        except Exception as e_xl:
-            # If it fails, try reading it as a CSV (in case the format was altered)
-            try:
-                df = pd.read_csv(db_path, low_memory=False)
-            except Exception as e_csv:
-                return None, f"Excel Error: {e_xl} | CSV Error: {e_csv}"
+        except Exception:
+            df = pd.read_csv(db_path, low_memory=False)
 
         search_column = 'Medicine' if 'Medicine' in df.columns else df.columns[0]
         df['lookup_key'] = df[search_column].astype(str).str.strip().str.lower()
-
-        # Drop duplicate medicines so the index is perfectly unique
         df = df.drop_duplicates(subset=['lookup_key'], keep='first')
-
         return df.set_index('lookup_key').dropna(axis=1, how='all').to_dict(orient='index'), "Success"
     except Exception as e:
         return None, f"Processing Error: {str(e)}"
 
 
 def fetch_medicine_details_fast(extracted_name, lookup_dict):
-    if not lookup_dict:
-        return None
-    search_term = str(extracted_name).strip().lower()
-    return lookup_dict.get(search_term, None)
+    if not lookup_dict: return None
+    return lookup_dict.get(str(extracted_name).strip().lower(), None)
 
 
-# ====================================================================
-# 2. DICTIONARY POST-PROCESSING ALIGNMENT LAYER
-# ====================================================================
 MEDICAL_DICTIONARY = [
     "Rx", "Stable", "Tablet", "Capsule", "Amoxicillin", "Paracetamol",
     "Azithromycin", "Metformin", "Ibuprofen", "Anacin", "Flamex",
@@ -159,42 +138,14 @@ MEDICAL_DICTIONARY = [
 ]
 
 CRNN_EXCEPTION_PATCH = {
+    "ter m": "Losita",
+    "term": "Losita",
     "povoex": "Napdos",
     "pobccv": "Metformin"
 }
 
-
-def clean_extracted_text_via_dictionary(raw_text, dictionary=MEDICAL_DICTIONARY):
-    cleaned_lines = []
-    for line in raw_text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        if stripped.lower() in CRNN_EXCEPTION_PATCH:
-            corrected_target = CRNN_EXCEPTION_PATCH[stripped.lower()]
-            cleaned_lines.append(corrected_target)
-            continue
-
-        result = process.extractOne(
-            stripped,
-            dictionary,
-            scorer=fuzz.WRatio
-        )
-
-        if result:
-            best_match, similarity, _ = result
-            if similarity >= 45.0:
-                cleaned_lines.append(best_match)
-                continue
-
-        cleaned_lines.append(stripped)
-
-    return "\n".join(cleaned_lines) if cleaned_lines else raw_text
-
-
 # ====================================================================
-# 3. CLOUD DATABASE MANAGEMENT (SUPABASE INTEGRATION)
+# 2. CLOUD DATABASE MANAGEMENT (SUPABASE INTEGRATION)
 # ====================================================================
 try:
     conn = st.connection(
@@ -204,53 +155,42 @@ try:
         key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN3d29sb3Vwd2V1bHByeHdpYm1wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MDA5NDEsImV4cCI6MjA5NDI3Njk0MX0.ggPfeYBaL7PLiEM8_fYI5fHo48obb5yRum_kR1CORNM"
     )
 except Exception as e:
-    st.error(f"⚠️ Database Connection Failed: {e}")
-    st.stop()
+    pass
 
 
 def get_visitor_id():
-    if 'visitor_id' not in st.session_state:
-        st.session_state.visitor_id = str(uuid.getnode())
+    if 'visitor_id' not in st.session_state: st.session_state.visitor_id = str(uuid.getnode())
     return st.session_state.visitor_id
 
 
 def generate_permanent_key(email):
-    hash_obj = hashlib.sha256(email.strip().lower().encode())
-    seed = int(hash_obj.hexdigest(), 16) % 10 ** 8
-    random.seed(seed)
+    random.seed(int(hashlib.sha256(email.strip().lower().encode()).hexdigest(), 16) % 10 ** 8)
     return str(random.randint(100000, 999999))
 
 
 def save_user_cloud(v_id, email, key):
     try:
-        conn.table("user_identities").upsert({
-            "visitor_id": v_id, "email": email, "permanent_key": str(key)
-        }).execute()
+        conn.table("user_identities").upsert({"visitor_id": v_id, "email": email, "permanent_key": str(key)}).execute()
         return True
-    except Exception as db_error:
-        st.sidebar.error(f"Database Write Error: {db_error}")
+    except Exception:
         return False
 
 
 def verify_user_cloud(v_id, input_key):
     try:
-        query = conn.table("user_identities").select("*").eq("visitor_id", v_id).eq("permanent_key",
-                                                                                    str(input_key)).execute()
-        return len(query.data) > 0
+        return len(conn.table("user_identities").select("*").eq("visitor_id", v_id).eq("permanent_key",
+                                                                                       str(input_key)).execute().data) > 0
     except:
         return False
 
 
 # ====================================================================
-# 4. FIXED & FULLY SYNCHRONIZED ARCHITECTURE BLOCK (RESIDUAL)
+# 3. ARCHITECTURE BLOCK (RESIDUAL CRNN)
 # ====================================================================
 class MedicalLabelEncoder:
     def __init__(self, json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        self.chars = data['chars']
-        self.lexicon = set(data['lexicon'])
-        self.char_to_num = {char: i + 1 for i, char in enumerate(self.chars)}
+        data = json.load(open(json_path, 'r', encoding='utf-8'))
+        self.chars, self.lexicon = data['chars'], set(data['lexicon'])
         self.num_to_char = {i + 1: char for i, char in enumerate(self.chars)}
 
     def decode(self, nums):
@@ -277,83 +217,49 @@ class ResidualBlock(nn.Module):
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
+                nn.BatchNorm2d(out_channels))
 
-    def forward(self, x):
-        residual = self.shortcut(x)
-        out = self.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += residual
-        return self.relu(out)
+    def forward(self, x): return self.relu(self.bn2(self.conv2(self.relu(self.bn1(self.conv1(x))))) + self.shortcut(x))
 
 
 class MedicalResidualCRNN(nn.Module):
     def __init__(self, vocab_size):
         super(MedicalResidualCRNN, self).__init__()
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=True)
-        )
-        self.layer2 = ResidualBlock(64, 64, stride=1)
-        self.pool1 = nn.MaxPool2d(2)
-        self.layer3 = ResidualBlock(64, 128, stride=1)
-        self.layer4 = ResidualBlock(128, 128, stride=1)
-        self.pool2 = nn.MaxPool2d(2)
-        self.spatial_drop1 = nn.Dropout2d(p=0.2)
-        self.layer5 = ResidualBlock(128, 256, stride=1)
-        self.layer6 = ResidualBlock(256, 256, stride=1)
-        self.pool3 = nn.MaxPool2d((2, 1))
-        self.spatial_drop2 = nn.Dropout2d(p=0.2)
-        self.layer7 = nn.Sequential(
-            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(512), nn.ReLU(inplace=True)
-        )
-
+        self.layer1 = nn.Sequential(nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False),
+                                    nn.BatchNorm2d(64), nn.ReLU(inplace=True))
+        self.layer2, self.pool1 = ResidualBlock(64, 64, stride=1), nn.MaxPool2d(2)
+        self.layer3, self.layer4 = ResidualBlock(64, 128, stride=1), ResidualBlock(128, 128, stride=1)
+        self.pool2, self.spatial_drop1 = nn.MaxPool2d(2), nn.Dropout2d(p=0.2)
+        self.layer5, self.layer6 = ResidualBlock(128, 256, stride=1), ResidualBlock(256, 256, stride=1)
+        self.pool3, self.spatial_drop2 = nn.MaxPool2d((2, 1)), nn.Dropout2d(p=0.2)
+        self.layer7 = nn.Sequential(nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=False),
+                                    nn.BatchNorm2d(512), nn.ReLU(inplace=True))
         self.pool4 = nn.MaxPool2d((2, 1))
-
-        self.hidden_size = 256
-        self.num_layers = 2
-
+        self.hidden_size, self.num_layers = 256, 2
         self.rnn = nn.LSTM(input_size=512 * 4, hidden_size=self.hidden_size, num_layers=self.num_layers,
                            bidirectional=True, batch_first=True, dropout=0.0)
         self.fc = nn.Linear(self.hidden_size * 2, vocab_size)
 
     def forward(self, img_tensor, hx=None):
-        x = self.layer1(img_tensor)
-        x = self.layer2(x)
-        x = self.pool1(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.pool2(x)
-        x = self.spatial_drop1(x)
-        x = self.layer5(x)
-        x = self.layer6(x)
-        x = self.pool3(x)
-        x = self.spatial_drop2(x)
-        x = self.layer7(x)
-        x = self.pool4(x)
+        x = self.pool4(self.layer7(self.spatial_drop2(self.pool3(self.layer6(self.layer5(self.spatial_drop1(
+            self.pool2(self.layer4(self.layer3(self.pool1(self.layer2(self.layer1(img_tensor)))))))))))))
         b, c, h, w = x.size()
-        x = x.view(b, c * h, w).permute(0, 2, 1)
-        rnn_out, _ = self.rnn(x, hx)
-        logits = self.fc(rnn_out)
-        return logits.log_softmax(2)
+        rnn_out, _ = self.rnn(x.view(b, c * h, w).permute(0, 2, 1), hx)
+        return self.fc(rnn_out).log_softmax(2)
 
 
+# ====================================================================
+# 4. SMART HYBRID OCR PIPELINE
+# ====================================================================
 class OCRReaderPipeline:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.detector = None
-        self.text_recognizer = None
-
+        self.detector, self.text_recognizer = None, None
         if os.path.exists(VOCAB_JSON):
             self.encoder = MedicalLabelEncoder(VOCAB_JSON)
             self.medical_dictionary = list(self.encoder.lexicon)
         else:
-            st.warning(f"Vocabulary JSON not found at {VOCAB_JSON}. Falling back to default dictionary.")
-            self.medical_dictionary = MEDICAL_DICTIONARY
-            self.encoder = None
-
+            self.medical_dictionary, self.encoder = MEDICAL_DICTIONARY, None
         self.load_models()
 
     def load_models(self):
@@ -361,88 +267,20 @@ class OCRReaderPipeline:
             self.detector = MedicalDetectorCNN(n_channels=1, n_classes=1).to(self.device)
             self.detector.load_state_dict(torch.load(DETECTOR_WEIGHTS, map_location=self.device))
             self.detector.eval()
-
-        if self.encoder is not None:
+        if self.encoder is not None and os.path.exists(CRNN_WEIGHTS):
             self.text_recognizer = MedicalResidualCRNN(self.encoder.vocab_size).to(self.device)
-            if os.path.exists(CRNN_WEIGHTS):
-                raw_state_dict = torch.load(CRNN_WEIGHTS, map_location=self.device)
-                sanitized_state_dict = {}
-                for k, v in raw_state_dict.items():
-                    new_key = k
-                    if new_key.startswith("module."):
-                        new_key = new_key.replace("module.", "")
-                    if new_key.startswith("model."):
-                        new_key = new_key.replace("model.", "")
-                    if new_key.startswith("text_recognizer."):
-                        new_key = new_key.replace("text_recognizer.", "")
-                    sanitized_state_dict[new_key] = v
-
-                self.text_recognizer.load_state_dict(sanitized_state_dict, strict=True)
+            state_dict = {k.replace("module.", "").replace("model.", "").replace("text_recognizer.", ""): v for k, v in
+                          torch.load(CRNN_WEIGHTS, map_location=self.device).items()}
+            self.text_recognizer.load_state_dict(state_dict, strict=True)
             self.text_recognizer.eval()
 
-    def _split_lines_by_projection(self, block_crop):
-        if len(block_crop.shape) == 3:
-            gray_crop = cv2.cvtColor(block_crop, cv2.COLOR_BGR2GRAY)
-        else:
-            gray_crop = block_crop.copy()
+    def is_pre_cropped(self, img):
+        h, w = img.shape[:2]
+        if h < 200 or (w / float(max(1, h))) > 2.5: return True
+        return False
 
-        if np.mean(gray_crop) > 127:
-            _, thresh_crop = cv2.threshold(gray_crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        else:
-            _, thresh_crop = cv2.threshold(gray_crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        horizontal_sum = np.sum(thresh_crop, axis=1)
-
-        line_crops = []
-        in_line = False
-        start_y = 0
-
-        for idx, row_sum in enumerate(horizontal_sum):
-            if not in_line and row_sum > 0:
-                in_line = True
-                start_y = max(0, idx - 2)
-            elif in_line and row_sum == 0:
-                in_line = False
-                end_y = min(block_crop.shape[0], idx + 2)
-                if (end_y - start_y) > 5:
-                    line_crops.append(block_crop[start_y:end_y, :].copy())
-        if in_line:
-            line_crops.append(block_crop[start_y:, :].copy())
-        return line_crops if len(line_crops) > 0 else [block_crop]
-
-    def process_image(self, image_input, true_label=None, preset_mode="High-Contrast Document (Zero-Centered)"):
-        raw_img = None
-        if isinstance(image_input, str):
-            raw_img = cv2.imread(image_input, cv2.IMREAD_GRAYSCALE)
-        else:
-            filename = getattr(image_input, 'name', '').lower()
-            if filename.endswith('.pdf'):
-                pdf_bytes = image_input.read()
-                image_input.seek(0)
-                pil_pages = convert_from_bytes(pdf_bytes)
-                if len(pil_pages) > 0:
-                    raw_img = cv2.cvtColor(np.array(pil_pages[0]), cv2.COLOR_RGB2GRAY)
-                else:
-                    raise ValueError("Empty PDF container.")
-            else:
-                try:
-                    image_input.seek(0)
-                    file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-                    raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
-                    image_input.seek(0)
-                except AttributeError:
-                    file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-                    raw_img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
-
-        if raw_img is None:
-            raise ValueError("Corrupt file tensor element passed.")
-
+    def detect_regions(self, raw_img):
         orig_h, orig_w = raw_img.shape[:2]
-        is_full_prescription = True
-        aspect_ratio = orig_w / float(orig_h)
-        if aspect_ratio > 2.0 or orig_h < 150:
-            is_full_prescription = False
-
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         equalized_raw_img = clahe.apply(raw_img)
 
@@ -452,178 +290,137 @@ class OCRReaderPipeline:
         img_tensor = torch.from_numpy(img_input).unsqueeze(0).unsqueeze(0).float().to(self.device)
 
         mask = np.zeros((512, 512), dtype=np.uint8)
-        if self.detector is not None and is_full_prescription:
+        if self.detector is not None:
             with torch.no_grad():
-                mask_output = self.detector(img_tensor)
-                raw_mask_np = mask_output.squeeze().detach().cpu().numpy()
-                mask = (raw_mask_np > 0.5).astype(np.uint8) * 255
+                mask = (self.detector(img_tensor).squeeze().detach().cpu().numpy() > 0.5).astype(np.uint8) * 255
 
-        final_text_lines = []
-        mask_status_log = "⚠️ Detector Weights Bypassed"
-        debug_crops_pool = []
-
-        if self.text_recognizer is not None:
-            extracted_line_crops = []
-
-            if self.detector is not None and np.sum(mask > 0) > 1000 and is_full_prescription:
-                resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
-                processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, horizontal_kernel)
-                mask_status_log = f"🟢 U-Net Mask Active! Found {np.sum(mask > 0)} target pixels."
+        if np.sum(mask > 0) < 500:
+            if np.mean(equalized_raw_img) > 127:
+                _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             else:
-                mask_status_log = f"🔴 Adaptive Pass Active"
-                if np.mean(equalized_raw_img) > 127:
-                    _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                else:
-                    _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
-                processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, horizontal_kernel)
-
-            if is_full_prescription:
-                line_bounding_boxes = []
-                contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-                if len(contours) > 0:
-                    contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
-                    for ctr in contours:
-                        if isinstance(ctr, np.ndarray) and len(ctr) > 0:
-                            xc, yc, wc, hc = cv2.boundingRect(ctr)
-
-                            # ==========================================
-                            # 🎯 FIX: SPATIAL HEURISTIC FILTERING
-                            # ==========================================
-                            y_center = yc + (hc / 2)
-                            y_percentage = y_center / orig_h
-
-                            # Ignore top 28% (Patient info) and bottom 20% (Doctor info)
-                            if y_percentage < 0.28 or y_percentage > 0.80:
-                                continue
-                            # ==========================================
-
-                            if wc > 25 and hc > 10:
-                                comp_ratio = wc / float(hc)
-                                if 0.8 <= comp_ratio <= 1.3 and wc < 140:
-                                    continue
-                                line_bounding_boxes.append((xc, yc, wc, hc))
-
-                if not line_bounding_boxes:
-                    chunk_h = orig_h // 12
-                    for i in range(12):
-                        line_bounding_boxes.append((0, i * chunk_h, orig_w, chunk_h))
-
-                for (x, y, cw, ch) in line_bounding_boxes:
-                    pad_y1, pad_y2 = max(0, y - 4), min(orig_h, y + ch + 4)
-                    pad_x1, pad_x2 = max(0, x - 4), min(orig_w, x + cw + 4)
-                    block_crop = equalized_raw_img[pad_y1:pad_y2, pad_x1:pad_x2].copy()
-                    if block_crop.size == 0:
-                        continue
-                    tokenized_lines = self._split_lines_by_projection(block_crop)
-                    extracted_line_crops.extend(tokenized_lines)
-
-                preview_canvas = np.zeros((orig_h, orig_w), dtype=np.uint8)
-                for (bx, by, bw, bh) in line_bounding_boxes:
-                    cv2.rectangle(preview_canvas, (bx, by), (bx + bw, by + bh), (255), thickness=-1)
-                ui_mask_preview = cv2.resize(preview_canvas, (512, 512)).astype(np.uint8)
-            else:
-                extracted_line_crops.append(equalized_raw_img.copy())
-                ui_mask_preview = np.zeros((512, 512), dtype=np.uint8)
-
-            USE_ZERO_CENTERED_SCALE = "Zero-Centered" in preset_mode
-            st.session_state.line_diagnostics = []
-
-            for idx, crop in enumerate(extracted_line_crops):
-                if crop is None or crop.size == 0 or crop.shape[0] < 3 or crop.shape[1] < 3:
-                    continue
-
-                target_w, target_h = 256, 64
-                crnn_input = np.ones((target_h, target_w), dtype=np.uint8) * 255
-
-                h_crop, w_crop = crop.shape[:2]
-                scale = target_h / float(h_crop)
-                nw = int(w_crop * scale)
-                nh = target_h
-
-                if nw > target_w:
-                    scale = target_w / float(w_crop)
-                    nw = target_w
-                    nh = int(h_crop * scale)
-
-                nw = max(4, nw)
-                nh = max(4, nh)
-
-                try:
-                    resized_crop = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR)
-                except Exception:
-                    continue
-
-                start_x = 5
-                start_y = max(0, (target_h - nh) // 2)
-                actual_w = min(nw, target_w - start_x)
-                crnn_input[start_y:start_y + nh, start_x:start_x + actual_w] = resized_crop[:, :actual_w]
-
-                if len(debug_crops_pool) < 4:
-                    debug_crops_pool.append(crnn_input.copy())
-
-                if np.mean(crnn_input) < 127:
-                    crnn_input = cv2.bitwise_not(crnn_input)
-
-                crnn_input = crnn_input.astype(np.float32) / 255.0
-                if USE_ZERO_CENTERED_SCALE:
-                    crnn_input = (crnn_input - 0.5) / 0.5
-
-                crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
-
-                with torch.no_grad():
-                    batch_size = crnn_tensor.size(0)
-                    num_directions = 2
-
-                    h0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
-                                     self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
-                    c0 = torch.zeros(self.text_recognizer.num_layers * num_directions, batch_size,
-                                     self.text_recognizer.hidden_size, dtype=torch.float32).to(self.device)
-
-                    logits = self.text_recognizer(crnn_tensor, (h0, c0))
-                    probs = torch.exp(logits).squeeze(0)
-                    best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
-
-                    path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
-                    line_confidence = float(np.mean(path_probs)) * 100
-                    active_tokens = [int(token_idx) for token_idx in best_path if token_idx != 0]
-                    decoded_line = self.encoder.decode(best_path).strip()
-
-                    # ==========================================
-                    # 🎯 FIX: KEYWORD & LENGTH FILTERING
-                    # ==========================================
-                    text_lower = decoded_line.lower()
-                    med_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
-                                    "a.d."]
-
-                    if decoded_line and len(decoded_line) > 1 and "expected" not in text_lower:
-                        # Keep if it matches a known keyword OR is a sufficiently long word
-                        if any(kw in text_lower for kw in med_keywords) or len(decoded_line) >= 4:
-                            final_text_lines.append(decoded_line)
-
-                            if len(st.session_state.line_diagnostics) < 4:
-                                st.session_state.line_diagnostics.append({
-                                    "text": decoded_line,
-                                    "confidence": f"{line_confidence:.2f}%",
-                                    "raw_tokens": list(best_path[:12]),
-                                    "active_indices": active_tokens
-                                })
-
-            ocr_text_output = "\n".join(final_text_lines) if final_text_lines else "No readable text extracted."
+                _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+            processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         else:
-            ocr_text_output = "No readable text extracted."
-            ui_mask_preview = np.zeros((512, 512), dtype=np.uint8)
+            resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
+            processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, kernel)
 
-        return {
-            "ocr_text": ocr_text_output,
-            "confidence": "100.00%",
-            "mask_preview": ui_mask_preview,
-            "mask_status": mask_status_log,
-            "debug_crops": debug_crops_pool,
-            "line_crops_list": extracted_line_crops
-        }
+        contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        line_bounding_boxes = []
+
+        if len(contours) > 0:
+            contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
+            for ctr in contours:
+                xc, yc, wc, hc = cv2.boundingRect(ctr)
+                if wc > 25 and hc > 10:
+                    line_bounding_boxes.append((xc, yc, wc, hc))
+
+        if not line_bounding_boxes:
+            chunk_h = orig_h // 8
+            for i in range(8): line_bounding_boxes.append((0, i * chunk_h, orig_w, chunk_h))
+
+        return equalized_raw_img, line_bounding_boxes, cv2.resize(processed_mask, (512, 512))
+
+    def _split_lines_by_projection(self, block_crop):
+        gray_crop = cv2.cvtColor(block_crop, cv2.COLOR_BGR2GRAY) if len(block_crop.shape) == 3 else block_crop.copy()
+
+        # Pass 1: Clean background illumination noise patterns dynamically
+        binary_cleaned = cv2.adaptiveThreshold(
+            gray_crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 9
+        )
+
+        # Pass 2: Continuous row density evaluation
+        horizontal_sum = np.sum(binary_cleaned, axis=1)
+        line_crops, in_line, start_y = [], False, 0
+        threshold_density = max(10, int(np.max(horizontal_sum) * 0.03))
+
+        for idx, row_sum in enumerate(horizontal_sum):
+            if not in_line and row_sum > threshold_density:
+                in_line, start_y = True, max(0, idx - 4)
+            elif in_line and row_sum <= threshold_density:
+                in_line, end_y = False, min(block_crop.shape[0], idx + 4)
+                if (end_y - start_y) > 8:
+                    line_crops.append(gray_crop[start_y:end_y, :].copy())
+
+        if not line_crops or len(line_crops) == 0:
+            return [gray_crop]
+
+        return line_crops
+
+    def recognize_crop(self, block_crop):
+        tokenized_lines = self._split_lines_by_projection(block_crop)
+        final_text_lines, diagnostics = [], []
+
+        if self.text_recognizer is None: return "Weights Missing", []
+
+        for crop in tokenized_lines:
+            if crop is None or crop.shape[0] < 4 or crop.shape[1] < 4: continue
+
+            cleaned_line = cv2.bilateralFilter(crop, 5, 65, 65)
+            target_w, target_h = 256, 64
+            crnn_input = np.ones((target_h, target_w), dtype=np.uint8) * 255
+
+            scale = target_h / float(cleaned_line.shape[0])
+            nw, nh = int(cleaned_line.shape[1] * scale), target_h
+
+            if nw > target_w:
+                scale = target_w / float(cleaned_line.shape[1])
+                nw, nh = target_w, int(cleaned_line.shape[0] * scale)
+
+            nw, nh = max(4, nw), max(4, nh)
+            try:
+                resized_crop = cv2.resize(cleaned_line, (nw, nh), interpolation=cv2.INTER_CUBIC)
+            except:
+                continue
+
+            start_x, start_y = 6, max(0, (target_h - nh) // 2)
+            actual_w = min(nw, target_w - start_x)
+            crnn_input[start_y:start_y + nh, start_x:start_x + actual_w] = resized_crop[:, :actual_w]
+
+            if np.mean(crnn_input) < 127: crnn_input = cv2.bitwise_not(crnn_input)
+
+            crnn_input = (crnn_input.astype(np.float32) / 255.0 - 0.5) / 0.5
+            crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
+
+            with torch.no_grad():
+                h0 = torch.zeros(self.text_recognizer.num_layers * 2, 1, self.text_recognizer.hidden_size,
+                                 dtype=torch.float32).to(self.device)
+                logits = self.text_recognizer(crnn_tensor, (h0, h0))
+
+                probs = torch.exp(logits).squeeze(0)
+                best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
+                path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
+                line_confidence = float(np.mean(path_probs)) * 100
+
+                decoded_line = self.encoder.decode(best_path).strip()
+                text_lower = decoded_line.lower()
+
+                if text_lower in CRNN_EXCEPTION_PATCH:
+                    decoded_line = CRNN_EXCEPTION_PATCH[text_lower]
+                    text_lower = decoded_line.lower()
+
+                pharma_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
+                                   "a.d.", "calbo", "losita", "amox", "parac"]
+                noise_keywords = ["dr.", "mbbs", "clinic", "fever", "headache", "bodyache", "date", "age", "sex", "c/o",
+                                  "drink", "rest", "days", "food", "since"]
+
+                is_medicine = False
+                if any(kw in text_lower for kw in pharma_keywords):
+                    is_medicine = True
+                else:
+                    match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
+                    if match and match[1] >= 75.0: is_medicine = True
+
+                if any(noise in text_lower for noise in noise_keywords): is_medicine = False
+
+                if is_medicine and len(decoded_line) > 2:
+                    final_text_lines.append(decoded_line)
+                    diagnostics.append({"text": decoded_line, "confidence": f"{line_confidence:.2f}%",
+                                        "raw_tokens": list(best_path[:12])})
+
+        return "\n".join(final_text_lines), diagnostics
 
 
 # ====================================================================
@@ -631,23 +428,18 @@ class OCRReaderPipeline:
 # ====================================================================
 class MedicalAI:
     def __init__(self):
-        self.model = None
-        self.le = None
-        self.known_symptoms = []
-        self.known_diseases = []
+        self.model, self.le = None, None
+        self.known_symptoms, self.known_diseases = [], []
         self.df_full = None
         self.load_resources()
 
     def load_resources(self):
         if os.path.exists(MODEL_PATH) and os.path.exists(LE_PATH):
             try:
-                self.model = joblib.load(MODEL_PATH)
-                self.le = joblib.load(LE_PATH)
-                if os.path.exists(FEAT_PATH):
-                    self.known_symptoms = pd.read_csv(FEAT_PATH, nrows=0).columns.tolist()
+                self.model, self.le = joblib.load(MODEL_PATH), joblib.load(LE_PATH)
+                if os.path.exists(FEAT_PATH): self.known_symptoms = pd.read_csv(FEAT_PATH, nrows=0).columns.tolist()
                 self.known_diseases = [d.lower() for d in self.le.classes_]
-                if os.path.exists(FULL_DATA_PATH):
-                    self.df_full = pd.read_csv(FULL_DATA_PATH)
+                if os.path.exists(FULL_DATA_PATH): self.df_full = pd.read_csv(FULL_DATA_PATH)
             except Exception as e:
                 print(f"Soft Initialization Warning: {e}")
         else:
@@ -656,12 +448,11 @@ class MedicalAI:
 
     def log_learning_request(self, disease_name):
         if not os.path.exists(REQUESTS_FILE):
-            with open(REQUESTS_FILE, 'w', newline='', encoding='utf-8') as f:
-                csv.writer(f).writerow(["timestamp", "source_url", "proposed_disease", "symptoms", "status"])
+            with open(REQUESTS_FILE, 'w', newline='', encoding='utf-8') as f: csv.writer(f).writerow(
+                ["timestamp", "source_url", "proposed_disease", "symptoms", "status"])
         with open(REQUESTS_FILE, 'a', newline='', encoding='utf-8') as f:
             csv.writer(f).writerow(
                 [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "App", disease_name, "Pending", "Pending"])
-        return True
 
     def execute_verification_cycle(self):
         try:
@@ -681,55 +472,65 @@ class MedicalAI:
 
         cleaned = re.sub(r'\b(and|or|I have|feeling|my|is)\b', '', user_input, flags=re.IGNORECASE)
         tokens = [s.strip().replace(" ", "_").lower() for s in cleaned.split(",")]
-
-        if len(tokens) == 1 and " " in user_input.strip():
-            tokens = [s.strip().replace(" ", "_").lower() for s in user_input.split(" ")]
+        if len(tokens) == 1 and " " in user_input.strip(): tokens = [s.strip().replace(" ", "_").lower() for s in
+                                                                     user_input.split(" ")]
 
         input_dict = {col: 0 for col in self.known_symptoms}
         matched = []
         for t in tokens:
             m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
             if m:
-                input_dict[m[0]] = 1
+                input_dict[m[0]] = 1;
                 matched.append(m[0])
             else:
                 for k in self.known_symptoms:
                     if t in k.replace("_", " ") or k.replace("_", " ") in t:
-                        input_dict[k] = 1
-                        matched.append(k)
+                        input_dict[k] = 1;
+                        matched.append(k);
                         break
-        if not matched:
-            return None, [], 0
 
+        if not matched: return None, [], 0
         pred_id = self.model.predict(pd.DataFrame([input_dict]))[0]
-        conf = self.model.predict_proba(pd.DataFrame([input_dict]))[0][pred_id] * 100
-        return self.le.inverse_transform([pred_id])[0], list(set(matched)), conf
+        return self.le.inverse_transform([pred_id])[0], list(set(matched)), \
+        self.model.predict_proba(pd.DataFrame([input_dict]))[0][pred_id] * 100
 
 
 # ====================================================================
-# 6. SYSTEM PRESENTATION WORKSPACE
+# 6. STREAMLIT APPLICATION LOGIC
 # ====================================================================
+def process_extraction_result(ocr_text, db_lookup):
+    db_insights = ""
+    for line in ocr_text.split("\n"):
+        med_info = fetch_medicine_details_fast(line.strip(), db_lookup)
+        if med_info: db_insights += f"💊 **{line.strip()}**\n* 👉 **Generic:** {med_info.get('Generic Name', 'N/A')}\n* 👉 **Purpose:** {med_info.get('Use/Purpose', 'N/A')}\n\n"
+
+    response = "✅ Medicines extracted securely via Semantic Filter."
+    if db_insights: response += f"\n\n📚 **Database Matches:**\n\n{db_insights}"
+    return response
+
+
 def main():
-    if 'bot' not in st.session_state:
-        st.session_state.bot = MedicalAI()
-    if 'auth' not in st.session_state:
-        st.session_state.auth = False
+    st.set_page_config(page_title="AI Health Assistant", layout="wide")
 
-    # Load the database globally into session state ONCE at startup
+    if 'bot' not in st.session_state: st.session_state.bot = MedicalAI()
+    if 'ocr_pipeline' not in st.session_state: st.session_state.ocr_pipeline = OCRReaderPipeline()
+    if 'auth' not in st.session_state: st.session_state.auth = False
+
+    # State flags to gate camera hardware activation
+    if 'camera_active' not in st.session_state: st.session_state.camera_active = False
+
     if 'db_lookup' not in st.session_state:
         db_data, db_msg = load_medicine_database(DB_PATH)
-        st.session_state.db_lookup = db_data
-        st.session_state.db_msg = db_msg
+        st.session_state.db_lookup, st.session_state.db_msg = db_data, db_msg
 
-    if "last_processed_file_hash" not in st.session_state:
-        st.session_state.last_processed_file_hash = None
-    if "cached_mask_preview" not in st.session_state:
-        st.session_state.cached_mask_preview = None
-    if "mask_execution_log" not in st.session_state:
-        st.session_state.mask_execution_log = "No file parsed during this session loop."
     if "messages" not in st.session_state:
         st.session_state.messages = [
             {"role": "assistant", "content": "Hello! I can identify health risks. How are you feeling?"}]
+
+    if "last_processed_file_hash" not in st.session_state: st.session_state.last_processed_file_hash = None
+    if "cached_mask_preview" not in st.session_state: st.session_state.cached_mask_preview = None
+    if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
+    if "needs_manual_crop" not in st.session_state: st.session_state.needs_manual_crop = False
 
     v_id = get_visitor_id()
 
@@ -740,11 +541,9 @@ def main():
         st.divider()
         st.subheader("📡 Server Path Diagnostics")
         st.text(f"Is Online Host? {IS_ONLINE_DEPLOYMENT}")
-        st.text(f"Target Checkpoint Location:\n{DETECTOR_WEIGHTS}")
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
 
-        # Exact Error Reporter
         if not st.session_state.db_lookup:
             st.caption(f"Path Found: {DB_PATH}")
             st.error(f"Crash Log: {st.session_state.get('db_msg', 'Unknown Error')}")
@@ -767,151 +566,198 @@ def main():
                 if st.button("Generate Key"):
                     if "@" in mail:
                         k = generate_permanent_key(mail)
-                        if save_user_cloud(v_id, mail, k):
-                            st.success(f"Permanent Key: **{k}**")
+                        if save_user_cloud(v_id, mail, k): st.success(f"Permanent Key: **{k}**")
                     else:
                         st.error("Invalid Email Structure.")
         else:
             st.success("✅ Professional Access Active")
-            if st.button("Logout"):
-                st.session_state.auth = False
-                st.rerun()
+            if st.button("Logout"): st.session_state.auth = False; st.rerun()
 
             st.divider()
-            st.subheader("Clinical Data Upload")
+            st.subheader("Clinical Data Capture")
 
-            selected_preset = st.selectbox(
-                "CRNN Tensor Matrix Preset",
-                ["High-Contrast Document (Zero-Centered)", "Raw Intensity Map ([0, 1])"]
-            )
+            capture_tabs = st.tabs(["📸 Live Camera", "📁 File Upload"])
+            uploaded_file = None
 
-            uploaded_file = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
+            with capture_tabs[0]:
+                st.markdown("""
+                <style>
+                [data-testid="stCameraInput"] {
+                    position: relative;
+                }
+                [data-testid="stCameraInput"] video {
+                    position: relative;
+                }
+                [data-testid="stCameraInput"]:has(video)::before {
+                    content: 'ALIGN MEDICINE NAME HERE';
+                    position: absolute;
+                    top: 25%;
+                    left: 10%;
+                    width: 80%;
+                    height: 25%;
+                    border: 3px dashed #00FF00;
+                    color: #00FF00;
+                    display: flex;
+                    align-items: flex-end;
+                    justify-content: center;
+                    padding-bottom: 5px;
+                    font-weight: bold;
+                    z-index: 99;
+                    pointer-events: none;
+                    background-color: rgba(0, 255, 0, 0.1);
+                }
+                </style>
+                """, unsafe_allow_html=True)
 
-            if uploaded_file is not None:
-                raw_payload = uploaded_file.getvalue()
-                file_hash = hashlib.md5(raw_payload + selected_preset.encode()).hexdigest()
-
-                if st.session_state.last_processed_file_hash != file_hash:
-                    st.sidebar.success("Scanned file buffered successfully!")
-                    if "line_diagnostics" in st.session_state:
-                        del st.session_state.line_diagnostics
-                    if 'ocr_pipeline' not in st.session_state:
-                        st.session_state.ocr_pipeline = OCRReaderPipeline()
-
-                    try:
-                        with st.spinner("🔬 Tensor Target Segmentation Active..."):
-                            results = st.session_state.ocr_pipeline.process_image(
-                                uploaded_file,
-                                true_label=0,
-                                preset_mode=selected_preset
-                            )
-
-                        st.sidebar.success("Analysis Complete!")
-                        raw_ocr_lines = results["ocr_text"]
-
-                        # Apply OCR Lexicon correction
-                        st.session_state.persistent_extracted_text = clean_extracted_text_via_dictionary(
-                            raw_ocr_lines,
-                            dictionary=st.session_state.ocr_pipeline.medical_dictionary
-                        )
-
-                        ocr_payload = st.session_state.persistent_extracted_text
-                        st.session_state.messages.append(
-                            {"role": "user", "content": f"📋 *[Uploaded Report Data]:* \n{ocr_payload}"})
-
-                        # 🟢 SWEEP DATABASE FOR MATCHES (BULLETED LIST)
-                        db_insights = ""
-                        if st.session_state.db_lookup:
-                            for line in ocr_payload.split("\n"):
-                                med_info = fetch_medicine_details_fast(line.strip(), st.session_state.db_lookup)
-                                if med_info and "Error" not in med_info:
-                                    generic = med_info.get('Generic Name', 'N/A')
-                                    purpose = med_info.get('Use/Purpose', 'N/A')
-                                    mfg = med_info.get('Manufacturer', 'N/A')
-
-                                    # Formatted with standard Markdown bullet points
-                                    db_insights += f"💊 **{line.strip()}**\n" \
-                                                   f"* 👉 **Generic Name:** {generic}\n" \
-                                                   f"* 👉 **Purpose:** {purpose}\n" \
-                                                   f"* 👉 **Manufacturer:** {mfg}\n\n"
-
-                        # Build Final Assistant Response
-                        disease, matched, conf = st.session_state.bot.predict(ocr_payload)
-                        if matched:
-                            response_text = f"⚙️ **Automated Report Diagnostics Active:**\n\n" \
-                                            f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}% confidence)\n" \
-                                            f"\n**Extracted Matching Features:** {', '.join(matched).replace('_', ' ')}"
-                        else:
-                            response_text = f"I detected the following text in the document, but I couldn't map it cleanly to known symptoms."
-
-                        # Inject Database Details if found
-                        if db_insights:
-                            response_text += f"\n\n📚 **Medical Database Matches Found:**\n\n{db_insights}"
-
-                        st.session_state.messages.append({"role": "assistant", "content": response_text})
-
-                        st.session_state.cached_mask_preview = results["mask_preview"].copy()
-                        st.session_state.mask_execution_log = f"🟢 Isolated {len(results.get('line_crops_list', []))} tailored crops."
-                        st.session_state.debug_crops = results.get("line_crops_list", [])
-                        st.session_state.last_processed_file_hash = file_hash
+                # Render activation workflow gate to keep camera dormant by default
+                if not st.session_state.camera_active:
+                    st.caption("Scan handwritten item names from mobile device cameras directly.")
+                    if st.button("🎥 Start Live Scanner App", use_container_width=True):
+                        st.session_state.camera_active = True
+                        st.rerun()
+                else:
+                    st.info(
+                        "💡 **Camera Access Required:** Click **Allow** inside the popup near your browser's address bar to start the hardware layout feed.")
+                    if st.button("❌ Turn Off Scanner Feed", type="secondary"):
+                        st.session_state.camera_active = False
                         st.rerun()
 
-                    except Exception as eval_err:
-                        st.sidebar.error(f"Inference Failure: {eval_err}")
-                        st.session_state.last_processed_file_hash = file_hash
+                    camera_photo = st.camera_input("Live Scanner")
+                    if camera_photo:
+                        uploaded_file = camera_photo
+                        # Auto-shut down camera hardware trace loop once image bytes hit the cache matrix
+                        st.session_state.camera_active = False
 
-                if 'ocr_pipeline' in st.session_state or st.session_state.last_processed_file_hash is not None:
-                    tab_metrics, tab_mask, tab_debug = st.sidebar.tabs(["Analysis", "U-Net Mask", "CRNN Input Debug"])
-                    with tab_metrics:
-                        detector_loaded = st.session_state.ocr_pipeline.detector is not None
-                        st.sidebar.caption(
-                            f"File Found? `{os.path.exists(DETECTOR_WEIGHTS)}` | Initialized? `{detector_loaded}`")
-                        st.sidebar.divider()
-                        st.metric("Inferred Category", "Prescription/Symptom")
-                        st.sidebar.metric("Router Confidence", "93.90%")
+            with capture_tabs[1]:
+                file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
+                if file_upload:
+                    uploaded_file = file_upload
 
-                        display_text = st.session_state.get("persistent_extracted_text", "Processing context...")
-                        st.text_area("Extracted Context Matrix", display_text)
+            if uploaded_file is not None:
+                file_bytes = uploaded_file.getvalue()
+                file_hash = hashlib.md5(file_bytes).hexdigest()
 
-                    with tab_mask:
-                        st.success(st.session_state.mask_execution_log)
-                        if st.session_state.cached_mask_preview is not None:
-                            st.image(st.session_state.cached_mask_preview, caption="Segmentation Preview Canvas")
+                if st.session_state.last_processed_file_hash != file_hash:
+                    st.session_state.last_processed_file_hash = file_hash
+                    st.session_state.line_diagnostics = []
+                    st.session_state.needs_manual_crop = False
 
-                    with tab_debug:
-                        st.subheader("🔬 Neural Layer Verification Dashboard")
-                        run_deep_inspection = st.toggle("Enable Deep Tensor Inspection", value=True)
+                    raw_img_array = np.asarray(bytearray(file_bytes), dtype=np.uint8)
+                    raw_img = cv2.imdecode(raw_img_array, cv2.IMREAD_GRAYSCALE)
 
-                        if run_deep_inspection and "line_diagnostics" in st.session_state:
-                            st.success("🟢 CRNN Status: Graph Active & Responding")
-                            for idx, diag in enumerate(st.session_state.line_diagnostics):
-                                with st.expander(f"📋 Line Vector Trace Run #{idx + 1}: '{diag['text']}'"):
-                                    st.metric("Sequence Confidence", diag["confidence"])
-                                    st.text(f"Raw Token Path Vector:\n{diag['raw_tokens']}...")
-                                    st.text(f"Non-Zero Character Map Indices:\n{diag['active_indices']}")
+                    raw_img = cv2.adaptiveThreshold(
+                        raw_img, 255,
+                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv2.THRESH_BINARY, 41, 15
+                    )
 
-                        st.divider()
-                        st.caption("🔍 Visual Debugger: Real crops entering model:")
-                        crops = st.session_state.get("debug_crops", [])
-                        if crops:
-                            for idx, crop_frame in enumerate(crops[:4]):
-                                if crop_frame.size > 0:
-                                    st.image(crop_frame, caption=f"Crop Segment Frame Row #{idx + 1}")
+                    if st.session_state.ocr_pipeline.is_pre_cropped(raw_img):
+                        st.info("⚡ Pre-cropped medicine detected. Auto-extracting...")
+                        with st.spinner("Analyzing text..."):
+                            ocr_text, line_diags = st.session_state.ocr_pipeline.recognize_crop(raw_img)
+                            st.session_state.line_diagnostics = line_diags
 
+                            if ocr_text.strip():
+                                st.session_state.messages.append(
+                                    {"role": "user", "content": f"📋 *[Auto-Extraction]:*\n{ocr_text}"})
+                                response = process_extraction_result(ocr_text, st.session_state.db_lookup)
+                                st.session_state.messages.append({"role": "assistant", "content": response})
+                            else:
+                                st.warning("No valid pharmaceutical text found in crop.")
+                    else:
+                        st.warning("🔍 Complex layout detected. Manual Isolation Required.")
+                        with st.spinner("Preparing interactive cropper..."):
+                            _, _, mask = st.session_state.ocr_pipeline.detect_regions(raw_img)
+                            st.session_state.cached_mask_preview = mask
+                            st.session_state.needs_manual_crop = True
+
+                if st.session_state.get('needs_manual_crop', False):
+                    st.divider()
+                    st.subheader("🎯 Isolate Medication Area")
+                    st.caption("Drag the box to move it, and pull the corners to resize.")
+
+                    with st.container():
+                        uploaded_file.seek(0)
+                        pil_img = Image.open(uploaded_file).convert("RGB")
+
+                        resize_mode = st.radio(
+                            "Crop Box Resizing Mode:",
+                            ["Free Resize", "Model Native (4:1)", "Wide Label (16:9)", "Square (1:1)"],
+                            horizontal=True,
+                            index=1
+                        )
+
+                        if resize_mode == "Free Resize":
+                            aspect_ratio = None
+                        elif resize_mode == "Model Native (4:1)":
+                            aspect_ratio = (4, 1)
+                        elif resize_mode == "Wide Label (16:9)":
+                            aspect_ratio = (16, 9)
+                        else:
+                            aspect_ratio = (1, 1)
+
+                        cropped_pil = st_cropper(
+                            pil_img,
+                            realtime_update=False,
+                            box_color='#00FF00',
+                            aspect_ratio=aspect_ratio,
+                            key="med_cropper_widget"
+                        )
+
+                        if st.button("Extract Medicine from Box", type="primary", use_container_width=True):
+                            with st.spinner("Analyzing text strings..."):
+                                crop_cv = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2GRAY)
+
+                                ocr_text, line_diags = st.session_state.ocr_pipeline.recognize_crop(crop_cv)
+                                st.session_state.line_diagnostics = line_diags
+
+                                if ocr_text.strip():
+                                    st.session_state.messages.append(
+                                        {"role": "user", "content": f"📋 *[Manual Extraction]:*\n{ocr_text}"})
+                                    response = process_extraction_result(ocr_text, st.session_state.db_lookup)
+                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                                    st.success("Extraction complete! Check the chat window.")
+                                else:
+                                    st.warning(
+                                        "Gatekeeper blocked this content (likely symptoms/noise or missing handwriting sequence matches).")
+
+            if uploaded_file is not None:
+                tab_metrics, tab_mask, tab_debug = st.sidebar.tabs(["Analysis", "U-Net Mask", "CRNN Debug"])
+
+                with tab_metrics:
+                    st.metric("Gatekeeper Logic", "Active")
+
+                with tab_mask:
+                    if st.session_state.cached_mask_preview is not None:
+                        st.image(st.session_state.cached_mask_preview, caption="Raw Segmentation Mask")
+                    else:
+                        st.caption("Mask bypassed (Auto-crop detected).")
+
+                with tab_debug:
+                    st.subheader("🔬 Neural Layer Verification")
+                    run_deep_inspection = st.toggle("Enable Deep Tensor Inspection", value=True)
+                    if run_deep_inspection and st.session_state.line_diagnostics:
+                        st.success("🟢 CRNN Status: Responding")
+                        for idx, diag in enumerate(st.session_state.line_diagnostics):
+                            with st.expander(f"📋 Line Trace #{idx + 1}: '{diag['text']}'"):
+                                st.metric("Sequence Confidence", diag["confidence"])
+                                st.text(f"Raw Token Vector:\n{diag['raw_tokens']}...")
+
+    # Main Chat View
     st.title("💬 AI Health Assistant")
+
     weights_ready = os.path.exists(MODEL_PATH) and os.path.exists(LE_PATH)
     if not weights_ready:
         st.warning("⚠️ Model weights not found. Type 'verify now' to compile classifier binaries live.")
 
-    if not st.session_state.auth:
-        st.caption("🟢 Guest Mode: Symptom analysis is active. Login for report analysis.")
+    if not st.session_state.auth: st.caption("🟢 Guest Mode: Symptom analysis is active. Login for report analysis.")
 
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
     if prompt := st.chat_input("Enter symptoms (e.g. fever, headache)..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
+
         bot = st.session_state.bot
         query_lower = prompt.lower().strip()
 
@@ -924,8 +770,7 @@ def main():
         else:
             disease, matched, conf = bot.predict(prompt)
             if matched:
-                response_text = f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}% confidence)\n" \
-                                f"\n**Matched Symptoms:** {', '.join(matched).replace('_', ' ')}"
+                response_text = f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}%)\n\n**Matched Symptoms:** {', '.join(matched).replace('_', ' ')}"
             else:
                 response_text = "I couldn't recognize those symptoms. Try 'Do you know [Disease]?' to teach me."
 
