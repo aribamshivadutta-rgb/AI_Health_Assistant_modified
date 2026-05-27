@@ -424,7 +424,7 @@ class MedicalAI:
         if not matched: return None, [], 0
         pred_id = self.model.predict(pd.DataFrame([input_dict]))[0]
         return self.le.inverse_transform([pred_id])[0], list(set(matched)), \
-        self.model.predict_proba(pd.DataFrame([input_dict]))[0][pred_id] * 100
+            self.model.predict_proba(pd.DataFrame([input_dict]))[0][pred_id] * 100
 
 
 # ====================================================================
@@ -473,6 +473,12 @@ def main():
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
 
+        if not st.session_state.db_lookup:
+            st.caption(f"Path Found: {DB_PATH}")
+            st.error(f"Crash Log: {st.session_state.get('db_msg', 'Unknown Error')}")
+
+        st.divider()
+
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
@@ -484,6 +490,14 @@ def main():
                         st.rerun()
                     else:
                         st.error("Invalid Key for this device.")
+            with tab_reg:
+                mail = st.text_input("Email for Key", key="vault_email")
+                if st.button("Generate Key"):
+                    if "@" in mail:
+                        k = generate_permanent_key(mail)
+                        if save_user_cloud(v_id, mail, k): st.success(f"Permanent Key: **{k}**")
+                    else:
+                        st.error("Invalid Email Structure.")
         else:
             st.success("✅ Professional Access Active")
             if st.button("Logout"): st.session_state.auth = False; st.rerun()
@@ -534,16 +548,38 @@ def main():
                     raw_img_array = np.asarray(bytearray(file_bytes), dtype=np.uint8)
                     raw_img = cv2.imdecode(raw_img_array, cv2.IMREAD_GRAYSCALE)
 
-                    # --- MATHEMATICAL COUPLING SCAN BOX CROP ---
-                    # If the image was captured via the camera UI, mathematically slice
-                    # out only the precise horizontal coordinate window mapped by the green CSS boundaries
+                    # --- ADVANCED COMPUTER VISION CARD EXTRACTION SCANNER ENGINE ---
+                    # Eliminates layout elements surrounding your screen frame template boundaries automatically
                     if camera_photo is not None:
-                        h_orig, w_orig = raw_img.shape[:2]
-                        y1 = int(h_orig * 0.38)
-                        y2 = int(h_orig * 0.62)
-                        x1 = int(w_orig * 0.05)
-                        x2 = int(w_orig * 0.95)
-                        raw_img = raw_img[y1:y2, x1:x2].copy()
+                        # Clean texture threshold pass to separate the bright focused document area
+                        blur_pre = cv2.GaussianBlur(raw_img, (5, 5), 0)
+                        _, thresh_card = cv2.threshold(blur_pre, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+                        card_contours, _ = cv2.findContours(thresh_card, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                        best_card_box = None
+                        max_card_area = 0
+                        h_img, w_img = raw_img.shape[:2]
+
+                        for cnt in card_contours:
+                            xc, yc, wc, hc = cv2.boundingRect(cnt)
+                            card_area = wc * hc
+                            # The framed target text-strip card is always the dominant horizontal block container on screen
+                            if wc > (w_img * 0.4) and hc > (h_img * 0.1):
+                                if card_area > max_card_area:
+                                    max_card_area = card_area
+                                    best_card_box = (xc, yc, wc, hc)
+
+                        # Fallback failsafe crop layer if edge matrix parameters are wash patterns
+                        if best_card_box is not None:
+                            xc, yc, wc, hc = best_card_box
+                            raw_img = raw_img[yc:yc + hc, xc:xc + wc].copy()
+                        else:
+                            y1 = int(h_img * 0.38)
+                            y2 = int(h_img * 0.62)
+                            x1 = int(w_img * 0.05)
+                            x2 = int(w_img * 0.95)
+                            raw_img = raw_img[y1:y2, x1:x2].copy()
 
                     raw_img = cv2.adaptiveThreshold(
                         raw_img, 255,
@@ -554,20 +590,21 @@ def main():
                     orig_h, orig_w = raw_img.shape[:2]
                     img_aspect = orig_w / float(orig_h)
 
-                    # --- DYNAMIC ROUTING MATRIX GATES ---
+                    # --- DYNAMIC ROUTING GATES ---
                     if camera_photo is not None or img_aspect > 2.2:
-                        # Skip full layout page segmentation for precise box targets
-                        with st.spinner("Processing Exact Normalization Layer..."):
+                        with st.spinner("Processing Isolated Target Card..."):
                             text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
                             if text_out.strip():
-                                st.session_state.line_diagnostics = [{"text": text_out, "confidence": f"{conf_out:.2f}%"}]
-                                st.session_state.messages.append({"role": "user", "content": f"📋 *[Direct Crop Extraction]:*\n{text_out}"})
+                                st.session_state.line_diagnostics = [
+                                    {"text": text_out, "confidence": f"{conf_out:.2f}%"}]
+                                st.session_state.messages.append(
+                                    {"role": "user", "content": f"📋 *[Direct Crop Extraction]:*\n{text_out}"})
                                 response = process_extraction_result(text_out, st.session_state.db_lookup)
                                 st.session_state.messages.append({"role": "assistant", "content": response})
                             else:
-                                st.error("No legible tokens matched your system database records.")
+                                st.error(
+                                    "No legible medical words matched your system database parameters within the isolated region.")
                     else:
-                        # Full layout processing mode for entire prescription uploads
                         with st.spinner("Deconstructing Full Page Matrix..."):
                             extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
 
@@ -585,7 +622,8 @@ def main():
 
                             if ocr_combined_result.strip():
                                 st.session_state.messages.append(
-                                    {"role": "user", "content": f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"})
+                                    {"role": "user",
+                                     "content": f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"})
                                 response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
                                 st.session_state.messages.append({"role": "assistant", "content": response})
                             else:
