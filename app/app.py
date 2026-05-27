@@ -473,12 +473,6 @@ def main():
         st.metric("Weights Target File Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
 
-        if not st.session_state.db_lookup:
-            st.caption(f"Path Found: {DB_PATH}")
-            st.error(f"Crash Log: {st.session_state.get('db_msg', 'Unknown Error')}")
-
-        st.divider()
-
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
@@ -490,14 +484,6 @@ def main():
                         st.rerun()
                     else:
                         st.error("Invalid Key for this device.")
-            with tab_reg:
-                mail = st.text_input("Email for Key", key="vault_email")
-                if st.button("Generate Key"):
-                    if "@" in mail:
-                        k = generate_permanent_key(mail)
-                        if save_user_cloud(v_id, mail, k): st.success(f"Permanent Key: **{k}**")
-                    else:
-                        st.error("Invalid Email Structure.")
         else:
             st.success("✅ Professional Access Active")
             if st.button("Logout"): st.session_state.auth = False; st.rerun()
@@ -548,6 +534,17 @@ def main():
                     raw_img_array = np.asarray(bytearray(file_bytes), dtype=np.uint8)
                     raw_img = cv2.imdecode(raw_img_array, cv2.IMREAD_GRAYSCALE)
 
+                    # --- MATHEMATICAL COUPLING SCAN BOX CROP ---
+                    # If the image was captured via the camera UI, mathematically slice
+                    # out only the precise horizontal coordinate window mapped by the green CSS boundaries
+                    if camera_photo is not None:
+                        h_orig, w_orig = raw_img.shape[:2]
+                        y1 = int(h_orig * 0.38)
+                        y2 = int(h_orig * 0.62)
+                        x1 = int(w_orig * 0.05)
+                        x2 = int(w_orig * 0.95)
+                        raw_img = raw_img[y1:y2, x1:x2].copy()
+
                     raw_img = cv2.adaptiveThreshold(
                         raw_img, 255,
                         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -558,8 +555,8 @@ def main():
                     img_aspect = orig_w / float(orig_h)
 
                     # --- DYNAMIC ROUTING MATRIX GATES ---
-                    if img_aspect > 2.2:
-                        # Case A: Pure 4:1 crop shape input verified (e.g. focused single line). Skip segmentation.
+                    if camera_photo is not None or img_aspect > 2.2:
+                        # Skip full layout page segmentation for precise box targets
                         with st.spinner("Processing Exact Normalization Layer..."):
                             text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
                             if text_out.strip():
@@ -570,7 +567,7 @@ def main():
                             else:
                                 st.error("No legible tokens matched your system database records.")
                     else:
-                        # Case B: Sheet document layout (Portrait full layout feed). Deconstruct via line segments.
+                        # Full layout processing mode for entire prescription uploads
                         with st.spinner("Deconstructing Full Page Matrix..."):
                             extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
 
