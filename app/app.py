@@ -278,7 +278,7 @@ class OCRReaderPipeline:
         orig_h, orig_w = raw_img.shape[:2]
 
         _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 3))
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (85, 4))
         dilated_mask = cv2.dilate(thresh, horizontal_kernel, iterations=1)
 
         contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -290,7 +290,7 @@ class OCRReaderPipeline:
                 x, y, w, h = cv2.boundingRect(ctr)
                 if w > 35 and h > 8:
                     pad_y1, pad_y2 = max(0, y - 2), min(orig_h, y + h + 2)
-                    pad_x1, pad_x2 = max(0, x - 5), min(orig_w, x + w + 5)
+                    pad_x1, pad_x2 = max(0, x - 2), min(orig_w, x + w + 2)
                     crop_slice = raw_img[pad_y1:pad_y2, pad_x1:pad_x2].copy()
                     if crop_slice.size > 0:
                         line_crops.append(crop_slice)
@@ -347,10 +347,8 @@ class OCRReaderPipeline:
                 text_lower = decoded_line.lower()
 
             match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
-            if match and match[1] >= 82.0:
+            if match and match[1] >= 65.0:
                 decoded_line = match[0]
-            else:
-                return "", 0.0
 
             return decoded_line, line_confidence
 
@@ -481,7 +479,23 @@ def main():
 
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
-            st.tabs(["Unlock", "Register"])
+            tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
+            with tab_unlock:
+                pin = st.text_input("Enter 6-Digit Key", type="password", key="vault_pin")
+                if st.button("Unlock Features"):
+                    if verify_user_cloud(v_id, pin):
+                        st.session_state.auth = True
+                        st.rerun()
+                    else:
+                        st.error("Invalid Key for this device.")
+            with tab_reg:
+                mail = st.text_input("Email for Key", key="vault_email")
+                if st.button("Generate Key"):
+                    if "@" in mail:
+                        k = generate_permanent_key(mail)
+                        if save_user_cloud(v_id, mail, k): st.success(f"Permanent Key: **{k}**")
+                    else:
+                        st.error("Invalid Email Structure.")
         else:
             st.success("✅ Professional Access Active")
             if st.button("Logout"): st.session_state.auth = False; st.rerun()
@@ -502,16 +516,39 @@ def main():
                     st.session_state.camera_active = False
                     st.rerun()
 
+                # --- ADVANCED FULL-BLEED OVERLAY CSS INTEGRATION SYSTEM ---
                 st.markdown("""
                 <style>
-                [data-testid="stCameraInput"] { position: relative; width: 100% !important; }
-                [data-testid="stCameraInput"] video { width: 100% !important; height: auto !important; object-fit: cover !important; }
+                [data-testid="stCameraInput"] {
+                    position: relative;
+                    width: 100% !important;
+                }
+                /* Forces the raw portrait smartphone stream component to cover the canvas full bleed */
+                [data-testid="stCameraInput"] video {
+                    width: 100% !important;
+                    height: auto !important;
+                    object-fit: cover !important;
+                }
+                /* Preserves structural target layout ribbon sizing over expanded active stream elements */
                 [data-testid="stCameraInput"]:has(video)::before {
                     content: 'ALIGN MEDICINE NAME HERE';
-                    position: absolute; top: 38%; left: 5%; width: 90%; height: 24%;
-                    border: 3px dashed #00FF00; color: #00FF00; display: flex; align-items: center; justify-content: center;
-                    font-size: 13px; font-weight: bold; text-align: center; z-index: 99; pointer-events: none;
-                    background-color: rgba(0, 255, 0, 0.08); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+                    position: absolute;
+                    top: 38%;
+                    left: 5%;
+                    width: 90%;
+                    height: 24%;
+                    border: 3px dashed #00FF00;
+                    color: #00FF00;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 13px;
+                    font-weight: bold;
+                    text-align: center;
+                    z-index: 99;
+                    pointer-events: none;
+                    background-color: rgba(0, 255, 0, 0.08);
+                    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4); /* Darkens content outside target zone */
                 }
                 </style>
                 """, unsafe_allow_html=True)
@@ -537,47 +574,28 @@ def main():
                         cv2.THRESH_BINARY, 41, 15
                     )
 
-                    orig_h, orig_w = raw_img.shape[:2]
-                    img_aspect = orig_w / float(orig_h)
+                    with st.spinner("Deconstructing Layout into Valid Text Streams..."):
+                        extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
 
-                    # --- DYNAMIC ROUTING MATRIX GATES ---
-                    if img_aspect > 2.2:
-                        # Case A: Pure 4:1 crop shape input target verified. Skip structural contour segmenting entirely.
-                        with st.spinner("Processing Exact Normalization Layer..."):
-                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
-                            if text_out.strip():
-                                st.session_state.line_diagnostics = [
-                                    {"text": text_out, "confidence": f"{conf_out:.2f}%"}]
-                                st.session_state.messages.append(
-                                    {"role": "user", "content": f"📋 *[Direct Crop Extraction]:*\n{text_out}"})
-                                response = process_extraction_result(text_out, st.session_state.db_lookup)
-                                st.session_state.messages.append({"role": "assistant", "content": response})
-                            else:
-                                st.error("No legible tokens matched your system database records.")
-                    else:
-                        # Case B: Sheet document layout. Deconstruct line tracking array contours first.
-                        with st.spinner("Deconstructing Full Page Matrix..."):
-                            extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
+                        all_discovered_text = []
+                        diags_pool = []
 
-                            all_discovered_text = []
-                            diags_pool = []
+                        for idx, slice_block in enumerate(extracted_slices):
+                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(slice_block)
+                            if text_out.strip() and len(text_out) > 2:
+                                all_discovered_text.append(text_out)
+                                diags_pool.append({"text": text_out, "confidence": f"{conf_out:.2f}%"})
 
-                            for slice_block in extracted_slices:
-                                text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(slice_block)
-                                if text_out.strip():
-                                    all_discovered_text.append(text_out)
-                                    diags_pool.append({"text": text_out, "confidence": f"{conf_out:.2f}%"})
+                        st.session_state.line_diagnostics = diags_pool
+                        ocr_combined_result = "\n".join(all_discovered_text)
 
-                            st.session_state.line_diagnostics = diags_pool
-                            ocr_combined_result = "\n".join(all_discovered_text)
-
-                            if ocr_combined_result.strip():
-                                st.session_state.messages.append({"role": "user",
-                                                                  "content": f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"})
-                                response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
-                                st.session_state.messages.append({"role": "assistant", "content": response})
-                            else:
-                                st.error("No valid medicine entries could be identified across the full layout lines.")
+                        if ocr_combined_result.strip():
+                            st.session_state.messages.append(
+                                {"role": "user", "content": f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"})
+                            response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
+                            st.session_state.messages.append({"role": "assistant", "content": response})
+                        else:
+                            st.error("No legible medical tokens could be resolved from this capture layout area.")
 
             if uploaded_file is not None and st.session_state.line_diagnostics:
                 st.divider()
@@ -587,16 +605,35 @@ def main():
 
     # Main Chat View
     st.title("💬 AI Health Assistant")
+
+    weights_ready = os.path.exists(MODEL_PATH) and os.path.exists(LE_PATH)
+    if not weights_ready:
+        st.warning("⚠️ Model weights not found. Type 'verify now' to compile classifier binaries live.")
+
+    if not st.session_state.auth: st.caption("🟢 Guest Mode: Symptom analysis is active. Login for report analysis.")
+
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Enter symptoms..."):
+    if prompt := st.chat_input("Enter symptoms (e.g. fever, headache)..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        disease, matched, conf = st.session_state.bot.predict(prompt)
-        if matched:
-            response_text = f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}%)\n\n**Matched Symptoms:** {', '.join(matched).replace('_', ' ')}"
+
+        bot = st.session_state.bot
+        query_lower = prompt.lower().strip()
+
+        if query_lower == "verify now":
+            _, response_text = bot.execute_verification_cycle()
+        elif query_lower.startswith("do you know "):
+            disease = query_lower[12:].strip("? ")
+            bot.log_learning_request(disease)
+            response_text = f"📝 Logged: **{disease}**. Type 'verify now' to trigger training."
         else:
-            response_text = "I couldn't recognize those symptoms."
+            disease, matched, conf = bot.predict(prompt)
+            if matched:
+                response_text = f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}%)\n\n**Matched Symptoms:** {', '.join(matched).replace('_', ' ')}"
+            else:
+                response_text = "I couldn't recognize those symptoms. Try 'Do you know [Disease]?' to teach me."
+
         st.session_state.messages.append({"role": "assistant", "content": response_text})
         st.rerun()
 
