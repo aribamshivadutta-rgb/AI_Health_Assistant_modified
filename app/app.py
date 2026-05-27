@@ -24,7 +24,6 @@ import streamlit as st
 from pdf2image import convert_from_bytes
 from rapidfuzz import process, fuzz, distance
 from st_supabase_connection import SupabaseConnection
-from streamlit_cropper import st_cropper
 from PIL import Image
 
 # ====================================================================
@@ -141,7 +140,8 @@ CRNN_EXCEPTION_PATCH = {
     "ter m": "Losita",
     "term": "Losita",
     "povoex": "Napdos",
-    "pobccv": "Metformin"
+    "pobccv": "Metformin",
+    "calbo d": "Calbo-D"
 }
 
 # ====================================================================
@@ -274,153 +274,83 @@ class OCRReaderPipeline:
             self.text_recognizer.load_state_dict(state_dict, strict=True)
             self.text_recognizer.eval()
 
-    def is_pre_cropped(self, img):
-        h, w = img.shape[:2]
-        if h < 200 or (w / float(max(1, h))) > 2.5: return True
-        return False
-
-    def detect_regions(self, raw_img):
+    def segment_full_prescription(self, raw_img):
         orig_h, orig_w = raw_img.shape[:2]
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        equalized_raw_img = clahe.apply(raw_img)
 
-        resized_img = cv2.resize(equalized_raw_img, (512, 512))
-        processed_unet_input = cv2.bitwise_not(resized_img) if np.mean(resized_img) > 127 else resized_img.copy()
-        img_input = processed_unet_input / 255.0
-        img_tensor = torch.from_numpy(img_input).unsqueeze(0).unsqueeze(0).float().to(self.device)
+        _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (85, 4))
+        dilated_mask = cv2.dilate(thresh, horizontal_kernel, iterations=1)
 
-        mask = np.zeros((512, 512), dtype=np.uint8)
-        if self.detector is not None:
-            with torch.no_grad():
-                mask = (self.detector(img_tensor).squeeze().detach().cpu().numpy() > 0.5).astype(np.uint8) * 255
-
-        if np.sum(mask > 0) < 500:
-            if np.mean(equalized_raw_img) > 127:
-                _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            else:
-                _, thresh = cv2.threshold(equalized_raw_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
-            processed_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        else:
-            resized_mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 8))
-            processed_mask = cv2.morphologyEx(resized_mask, cv2.MORPH_CLOSE, kernel)
-
-        contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        line_bounding_boxes = []
+        contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        line_crops = []
 
         if len(contours) > 0:
             contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
             for ctr in contours:
-                xc, yc, wc, hc = cv2.boundingRect(ctr)
-                if wc > 25 and hc > 10:
-                    line_bounding_boxes.append((xc, yc, wc, hc))
+                x, y, w, h = cv2.boundingRect(ctr)
+                if w > 35 and h > 8:
+                    pad_y1, pad_y2 = max(0, y - 2), min(orig_h, y + h + 2)
+                    pad_x1, pad_x2 = max(0, x - 2), min(orig_w, x + w + 2)
+                    crop_slice = raw_img[pad_y1:pad_y2, pad_x1:pad_x2].copy()
+                    if crop_slice.size > 0:
+                        line_crops.append(crop_slice)
 
-        if not line_bounding_boxes:
-            chunk_h = orig_h // 8
-            for i in range(8): line_bounding_boxes.append((0, i * chunk_h, orig_w, chunk_h))
+        return line_crops if len(line_crops) > 0 else [raw_img]
 
-        return equalized_raw_img, line_bounding_boxes, cv2.resize(processed_mask, (512, 512))
+    def recognize_crop(self, crop):
+        if self.text_recognizer is None: return "Weights Missing", 0.0
+        if crop is None or crop.shape[0] < 4 or crop.shape[1] < 4: return "", 0.0
 
-    def _split_lines_by_projection(self, block_crop):
-        gray_crop = cv2.cvtColor(block_crop, cv2.COLOR_BGR2GRAY) if len(block_crop.shape) == 3 else block_crop.copy()
+        cleaned_line = cv2.bilateralFilter(crop, 5, 65, 65)
 
-        # Pass 1: Clean background illumination noise patterns dynamically
-        binary_cleaned = cv2.adaptiveThreshold(
-            gray_crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 15, 9
-        )
+        target_w, target_h = 256, 64
+        crnn_input = np.ones((target_h, target_w), dtype=np.uint8) * 255
 
-        # Pass 2: Continuous row density evaluation
-        horizontal_sum = np.sum(binary_cleaned, axis=1)
-        line_crops, in_line, start_y = [], False, 0
-        threshold_density = max(10, int(np.max(horizontal_sum) * 0.03))
+        scale = target_h / float(cleaned_line.shape[0])
+        nw, nh = int(cleaned_line.shape[1] * scale), target_h
 
-        for idx, row_sum in enumerate(horizontal_sum):
-            if not in_line and row_sum > threshold_density:
-                in_line, start_y = True, max(0, idx - 4)
-            elif in_line and row_sum <= threshold_density:
-                in_line, end_y = False, min(block_crop.shape[0], idx + 4)
-                if (end_y - start_y) > 8:
-                    line_crops.append(gray_crop[start_y:end_y, :].copy())
+        if nw > target_w:
+            scale = target_w / float(cleaned_line.shape[1])
+            nw, nh = target_w, int(cleaned_line.shape[0] * scale)
 
-        if not line_crops or len(line_crops) == 0:
-            return [gray_crop]
+        nw, nh = max(4, nw), max(4, nh)
+        try:
+            resized_crop = cv2.resize(cleaned_line, (nw, nh), interpolation=cv2.INTER_CUBIC)
+        except:
+            return "", 0.0
 
-        return line_crops
+        start_x = max(0, (target_w - nw) // 2)
+        start_y = max(0, (target_h - nh) // 2)
+        actual_w = min(nw, target_w - start_x)
+        crnn_input[start_y:start_y + nh, start_x:start_x + actual_w] = resized_crop[:, :actual_w]
 
-    def recognize_crop(self, block_crop):
-        tokenized_lines = self._split_lines_by_projection(block_crop)
-        final_text_lines, diagnostics = [], []
+        if np.mean(crnn_input) < 127: crnn_input = cv2.bitwise_not(crnn_input)
 
-        if self.text_recognizer is None: return "Weights Missing", []
+        crnn_input = (crnn_input.astype(np.float32) / 255.0 - 0.5) / 0.5
+        crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
 
-        for crop in tokenized_lines:
-            if crop is None or crop.shape[0] < 4 or crop.shape[1] < 4: continue
+        with torch.no_grad():
+            h0 = torch.zeros(self.text_recognizer.num_layers * 2, 1, self.text_recognizer.hidden_size,
+                             dtype=torch.float32).to(self.device)
+            logits = self.text_recognizer(crnn_tensor, (h0, h0))
 
-            cleaned_line = cv2.bilateralFilter(crop, 5, 65, 65)
-            target_w, target_h = 256, 64
-            crnn_input = np.ones((target_h, target_w), dtype=np.uint8) * 255
+            probs = torch.exp(logits).squeeze(0)
+            best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
+            path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
+            line_confidence = float(np.mean(path_probs)) * 100
 
-            scale = target_h / float(cleaned_line.shape[0])
-            nw, nh = int(cleaned_line.shape[1] * scale), target_h
+            decoded_line = self.encoder.decode(best_path).strip()
+            text_lower = decoded_line.lower()
 
-            if nw > target_w:
-                scale = target_w / float(cleaned_line.shape[1])
-                nw, nh = target_w, int(cleaned_line.shape[0] * scale)
-
-            nw, nh = max(4, nw), max(4, nh)
-            try:
-                resized_crop = cv2.resize(cleaned_line, (nw, nh), interpolation=cv2.INTER_CUBIC)
-            except:
-                continue
-
-            start_x, start_y = 6, max(0, (target_h - nh) // 2)
-            actual_w = min(nw, target_w - start_x)
-            crnn_input[start_y:start_y + nh, start_x:start_x + actual_w] = resized_crop[:, :actual_w]
-
-            if np.mean(crnn_input) < 127: crnn_input = cv2.bitwise_not(crnn_input)
-
-            crnn_input = (crnn_input.astype(np.float32) / 255.0 - 0.5) / 0.5
-            crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
-
-            with torch.no_grad():
-                h0 = torch.zeros(self.text_recognizer.num_layers * 2, 1, self.text_recognizer.hidden_size,
-                                 dtype=torch.float32).to(self.device)
-                logits = self.text_recognizer(crnn_tensor, (h0, h0))
-
-                probs = torch.exp(logits).squeeze(0)
-                best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
-                path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
-                line_confidence = float(np.mean(path_probs)) * 100
-
-                decoded_line = self.encoder.decode(best_path).strip()
+            if text_lower in CRNN_EXCEPTION_PATCH:
+                decoded_line = CRNN_EXCEPTION_PATCH[text_lower]
                 text_lower = decoded_line.lower()
 
-                if text_lower in CRNN_EXCEPTION_PATCH:
-                    decoded_line = CRNN_EXCEPTION_PATCH[text_lower]
-                    text_lower = decoded_line.lower()
+            match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
+            if match and match[1] >= 65.0:
+                decoded_line = match[0]
 
-                pharma_keywords = ["tab", "cap", "mg", "ml", "sig", "#", "acid", "sulfate", "feso4", "once", "day",
-                                   "a.d.", "calbo", "losita", "amox", "parac"]
-                noise_keywords = ["dr.", "mbbs", "clinic", "fever", "headache", "bodyache", "date", "age", "sex", "c/o",
-                                  "drink", "rest", "days", "food", "since"]
-
-                is_medicine = False
-                if any(kw in text_lower for kw in pharma_keywords):
-                    is_medicine = True
-                else:
-                    match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
-                    if match and match[1] >= 75.0: is_medicine = True
-
-                if any(noise in text_lower for noise in noise_keywords): is_medicine = False
-
-                if is_medicine and len(decoded_line) > 2:
-                    final_text_lines.append(decoded_line)
-                    diagnostics.append({"text": decoded_line, "confidence": f"{line_confidence:.2f}%",
-                                        "raw_tokens": list(best_path[:12])})
-
-        return "\n".join(final_text_lines), diagnostics
+            return decoded_line, line_confidence
 
 
 # ====================================================================
@@ -501,10 +431,11 @@ class MedicalAI:
 def process_extraction_result(ocr_text, db_lookup):
     db_insights = ""
     for line in ocr_text.split("\n"):
+        if len(line.strip()) <= 2: continue
         med_info = fetch_medicine_details_fast(line.strip(), db_lookup)
         if med_info: db_insights += f"💊 **{line.strip()}**\n* 👉 **Generic:** {med_info.get('Generic Name', 'N/A')}\n* 👉 **Purpose:** {med_info.get('Use/Purpose', 'N/A')}\n\n"
 
-    response = "✅ Medicines extracted securely via Semantic Filter."
+    response = "✅ Medicines extracted securely via Normalized Matrix."
     if db_insights: response += f"\n\n📚 **Database Matches:**\n\n{db_insights}"
     return response
 
@@ -516,9 +447,6 @@ def main():
     if 'ocr_pipeline' not in st.session_state: st.session_state.ocr_pipeline = OCRReaderPipeline()
     if 'auth' not in st.session_state: st.session_state.auth = False
 
-    # State flags to gate camera hardware activation
-    if 'camera_active' not in st.session_state: st.session_state.camera_active = False
-
     if 'db_lookup' not in st.session_state:
         db_data, db_msg = load_medicine_database(DB_PATH)
         st.session_state.db_lookup, st.session_state.db_msg = db_data, db_msg
@@ -528,9 +456,8 @@ def main():
             {"role": "assistant", "content": "Hello! I can identify health risks. How are you feeling?"}]
 
     if "last_processed_file_hash" not in st.session_state: st.session_state.last_processed_file_hash = None
-    if "cached_mask_preview" not in st.session_state: st.session_state.cached_mask_preview = None
     if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
-    if "needs_manual_crop" not in st.session_state: st.session_state.needs_manual_crop = False
+    if 'camera_active' not in st.session_state: st.session_state.camera_active = False
 
     v_id = get_visitor_id()
 
@@ -576,62 +503,59 @@ def main():
             st.divider()
             st.subheader("Clinical Data Capture")
 
-            capture_tabs = st.tabs(["📸 Live Camera", "📁 File Upload"])
-            uploaded_file = None
+            file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
+            st.markdown("<p style='text-align: center; margin: 5px 0;'><b>— OR —</b></p>", unsafe_allow_html=True)
 
-            with capture_tabs[0]:
+            camera_photo = None
+            if not st.session_state.camera_active:
+                if st.button("📸 Open Live Camera Scanner", use_container_width=True):
+                    st.session_state.camera_active = True
+                    st.rerun()
+            else:
+                if st.button("❌ Close Camera", use_container_width=True):
+                    st.session_state.camera_active = False
+                    st.rerun()
+
+                # --- ADVANCED FULL-BLEED OVERLAY CSS INTEGRATION SYSTEM ---
                 st.markdown("""
                 <style>
                 [data-testid="stCameraInput"] {
                     position: relative;
+                    width: 100% !important;
                 }
+                /* Forces the raw portrait smartphone stream component to cover the canvas full bleed */
                 [data-testid="stCameraInput"] video {
-                    position: relative;
+                    width: 100% !important;
+                    height: auto !important;
+                    object-fit: cover !important;
                 }
+                /* Preserves structural target layout ribbon sizing over expanded active stream elements */
                 [data-testid="stCameraInput"]:has(video)::before {
                     content: 'ALIGN MEDICINE NAME HERE';
                     position: absolute;
-                    top: 25%;
-                    left: 10%;
-                    width: 80%;
-                    height: 25%;
+                    top: 38%;
+                    left: 5%;
+                    width: 90%;
+                    height: 24%;
                     border: 3px dashed #00FF00;
                     color: #00FF00;
                     display: flex;
-                    align-items: flex-end;
+                    align-items: center;
                     justify-content: center;
-                    padding-bottom: 5px;
+                    font-size: 13px;
                     font-weight: bold;
+                    text-align: center;
                     z-index: 99;
                     pointer-events: none;
-                    background-color: rgba(0, 255, 0, 0.1);
+                    background-color: rgba(0, 255, 0, 0.08);
+                    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4); /* Darkens content outside target zone */
                 }
                 </style>
                 """, unsafe_allow_html=True)
 
-                # Render activation workflow gate to keep camera dormant by default
-                if not st.session_state.camera_active:
-                    st.caption("Scan handwritten item names from mobile device cameras directly.")
-                    if st.button("🎥 Start Live Scanner App", use_container_width=True):
-                        st.session_state.camera_active = True
-                        st.rerun()
-                else:
-                    st.info(
-                        "💡 **Camera Access Required:** Click **Allow** inside the popup near your browser's address bar to start the hardware layout feed.")
-                    if st.button("❌ Turn Off Scanner Feed", type="secondary"):
-                        st.session_state.camera_active = False
-                        st.rerun()
+                camera_photo = st.camera_input("Capture Medicine")
 
-                    camera_photo = st.camera_input("Live Scanner")
-                    if camera_photo:
-                        uploaded_file = camera_photo
-                        # Auto-shut down camera hardware trace loop once image bytes hit the cache matrix
-                        st.session_state.camera_active = False
-
-            with capture_tabs[1]:
-                file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
-                if file_upload:
-                    uploaded_file = file_upload
+            uploaded_file = camera_photo if camera_photo else file_upload
 
             if uploaded_file is not None:
                 file_bytes = uploaded_file.getvalue()
@@ -640,7 +564,6 @@ def main():
                 if st.session_state.last_processed_file_hash != file_hash:
                     st.session_state.last_processed_file_hash = file_hash
                     st.session_state.line_diagnostics = []
-                    st.session_state.needs_manual_crop = False
 
                     raw_img_array = np.asarray(bytearray(file_bytes), dtype=np.uint8)
                     raw_img = cv2.imdecode(raw_img_array, cv2.IMREAD_GRAYSCALE)
@@ -651,97 +574,34 @@ def main():
                         cv2.THRESH_BINARY, 41, 15
                     )
 
-                    if st.session_state.ocr_pipeline.is_pre_cropped(raw_img):
-                        st.info("⚡ Pre-cropped medicine detected. Auto-extracting...")
-                        with st.spinner("Analyzing text..."):
-                            ocr_text, line_diags = st.session_state.ocr_pipeline.recognize_crop(raw_img)
-                            st.session_state.line_diagnostics = line_diags
+                    with st.spinner("Deconstructing Layout into Valid Text Streams..."):
+                        extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
 
-                            if ocr_text.strip():
-                                st.session_state.messages.append(
-                                    {"role": "user", "content": f"📋 *[Auto-Extraction]:*\n{ocr_text}"})
-                                response = process_extraction_result(ocr_text, st.session_state.db_lookup)
-                                st.session_state.messages.append({"role": "assistant", "content": response})
-                            else:
-                                st.warning("No valid pharmaceutical text found in crop.")
-                    else:
-                        st.warning("🔍 Complex layout detected. Manual Isolation Required.")
-                        with st.spinner("Preparing interactive cropper..."):
-                            _, _, mask = st.session_state.ocr_pipeline.detect_regions(raw_img)
-                            st.session_state.cached_mask_preview = mask
-                            st.session_state.needs_manual_crop = True
+                        all_discovered_text = []
+                        diags_pool = []
 
-                if st.session_state.get('needs_manual_crop', False):
-                    st.divider()
-                    st.subheader("🎯 Isolate Medication Area")
-                    st.caption("Drag the box to move it, and pull the corners to resize.")
+                        for idx, slice_block in enumerate(extracted_slices):
+                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(slice_block)
+                            if text_out.strip() and len(text_out) > 2:
+                                all_discovered_text.append(text_out)
+                                diags_pool.append({"text": text_out, "confidence": f"{conf_out:.2f}%"})
 
-                    with st.container():
-                        uploaded_file.seek(0)
-                        pil_img = Image.open(uploaded_file).convert("RGB")
+                        st.session_state.line_diagnostics = diags_pool
+                        ocr_combined_result = "\n".join(all_discovered_text)
 
-                        resize_mode = st.radio(
-                            "Crop Box Resizing Mode:",
-                            ["Free Resize", "Model Native (4:1)", "Wide Label (16:9)", "Square (1:1)"],
-                            horizontal=True,
-                            index=1
-                        )
-
-                        if resize_mode == "Free Resize":
-                            aspect_ratio = None
-                        elif resize_mode == "Model Native (4:1)":
-                            aspect_ratio = (4, 1)
-                        elif resize_mode == "Wide Label (16:9)":
-                            aspect_ratio = (16, 9)
+                        if ocr_combined_result.strip():
+                            st.session_state.messages.append(
+                                {"role": "user", "content": f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"})
+                            response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
+                            st.session_state.messages.append({"role": "assistant", "content": response})
                         else:
-                            aspect_ratio = (1, 1)
+                            st.error("No legible medical tokens could be resolved from this capture layout area.")
 
-                        cropped_pil = st_cropper(
-                            pil_img,
-                            realtime_update=False,
-                            box_color='#00FF00',
-                            aspect_ratio=aspect_ratio,
-                            key="med_cropper_widget"
-                        )
-
-                        if st.button("Extract Medicine from Box", type="primary", use_container_width=True):
-                            with st.spinner("Analyzing text strings..."):
-                                crop_cv = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2GRAY)
-
-                                ocr_text, line_diags = st.session_state.ocr_pipeline.recognize_crop(crop_cv)
-                                st.session_state.line_diagnostics = line_diags
-
-                                if ocr_text.strip():
-                                    st.session_state.messages.append(
-                                        {"role": "user", "content": f"📋 *[Manual Extraction]:*\n{ocr_text}"})
-                                    response = process_extraction_result(ocr_text, st.session_state.db_lookup)
-                                    st.session_state.messages.append({"role": "assistant", "content": response})
-                                    st.success("Extraction complete! Check the chat window.")
-                                else:
-                                    st.warning(
-                                        "Gatekeeper blocked this content (likely symptoms/noise or missing handwriting sequence matches).")
-
-            if uploaded_file is not None:
-                tab_metrics, tab_mask, tab_debug = st.sidebar.tabs(["Analysis", "U-Net Mask", "CRNN Debug"])
-
-                with tab_metrics:
-                    st.metric("Gatekeeper Logic", "Active")
-
-                with tab_mask:
-                    if st.session_state.cached_mask_preview is not None:
-                        st.image(st.session_state.cached_mask_preview, caption="Raw Segmentation Mask")
-                    else:
-                        st.caption("Mask bypassed (Auto-crop detected).")
-
-                with tab_debug:
-                    st.subheader("🔬 Neural Layer Verification")
-                    run_deep_inspection = st.toggle("Enable Deep Tensor Inspection", value=True)
-                    if run_deep_inspection and st.session_state.line_diagnostics:
-                        st.success("🟢 CRNN Status: Responding")
-                        for idx, diag in enumerate(st.session_state.line_diagnostics):
-                            with st.expander(f"📋 Line Trace #{idx + 1}: '{diag['text']}'"):
-                                st.metric("Sequence Confidence", diag["confidence"])
-                                st.text(f"Raw Token Vector:\n{diag['raw_tokens']}...")
+            if uploaded_file is not None and st.session_state.line_diagnostics:
+                st.divider()
+                st.subheader("🔬 Document Parser Matrix")
+                for idx, diag in enumerate(st.session_state.line_diagnostics):
+                    st.metric(f"Line Segment #{idx + 1}", diag['text'], delta=diag['confidence'])
 
     # Main Chat View
     st.title("💬 AI Health Assistant")
