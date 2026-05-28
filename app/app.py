@@ -9,6 +9,8 @@ import uuid
 import subprocess
 from datetime import datetime
 import json
+import base64
+import io
 
 import torch
 import torch.nn as nn
@@ -442,12 +444,56 @@ def process_extraction_result(ocr_text, db_lookup):
     return response
 
 
+# ====================================================================
+# LIVE TELEHEALTH AUTO-POLLING STREAM MATRIX (FOCUS-SAFE)
+# ====================================================================
+@st.fragment(run_every=5)
+def live_chat_stream(room_id, view_role):
+    """
+    Isolates database tracking rules to prevent full-page resets,
+    preserving keyboard text box focus during messaging cycles.
+    Supports inline rendering of Base64 prescription image segments.
+    """
+    try:
+        chat_query = conn.table("doctor_chat_messages").select("*").eq("chat_room_id", room_id).order("created_at",
+                                                                                                      desc=False).execute()
+
+        for msg in chat_query.data:
+            if "[System Alert]" in msg["message_text"]:
+                st.caption(msg["message_text"])
+                continue
+
+            if view_role == "doctor":
+                role = "assistant" if msg["sender_type"] == "doctor" else "user"
+                prefix = "" if msg["message_text"].startswith("[IMAGE_BASE64]") else (
+                    "🩺 **You:** " if msg["sender_type"] == "doctor" else "👤 **Patient:** ")
+            else:
+                role = "user" if msg["sender_type"] == "patient" else "assistant"
+                prefix = "" if msg["message_text"].startswith("[IMAGE_BASE64]") else (
+                    "🩺 **Doctor:** " if msg["sender_type"] == "doctor" else "👤 **You:** ")
+
+            with st.chat_message(role):
+                if msg["message_text"].startswith("[IMAGE_BASE64]"):
+                    b64_data = msg["message_text"].replace("[IMAGE_BASE64]", "")
+                    sender_title = "🩺 **Attending Doctor Shared Image:**" if msg[
+                                                                                 "sender_type"] == "doctor" else "👤 **Patient Sent Prescription/Report Image:**"
+                    st.markdown(f"**{sender_title}**")
+                    st.image(b64_data, use_container_width=True)
+                else:
+                    st.markdown(f"{prefix}{msg['message_text']}")
+
+    except Exception as e:
+        st.caption(f"⚡ Connection jitter handled safely. Synchronizing framework... ({e})")
+
+
 def main():
     st.set_page_config(page_title="AI Health Assistant", layout="wide")
 
     if 'bot' not in st.session_state: st.session_state.bot = MedicalAI()
     if 'ocr_pipeline' not in st.session_state: st.session_state.ocr_pipeline = OCRReaderPipeline()
     if 'auth' not in st.session_state: st.session_state.auth = False
+    if 'chat_mode' not in st.session_state: st.session_state.chat_mode = "ai_assistant"
+    if 'is_doctor' not in st.session_state: st.session_state.is_doctor = False
 
     if 'db_lookup' not in st.session_state:
         db_data, db_msg = load_medicine_database(DB_PATH)
@@ -461,7 +507,15 @@ def main():
     if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
     if 'camera_active' not in st.session_state: st.session_state.camera_active = False
 
+    # Dynamic fail-safe declaration prevents scope compilation crashes across different routing tables
+    file_upload = None
+    camera_photo = None
+
     v_id = get_visitor_id()
+
+    # PREFIX ROUTING ASSIGNMENTS (Separates guest traffic channels fundamentally from logged profiles)
+    room_prefix = "user_" if st.session_state.auth else "guest_"
+    active_room_id = f"{room_prefix}{v_id}"
 
     with st.sidebar:
         st.header("🔐 Secure Vault")
@@ -479,17 +533,34 @@ def main():
 
         st.divider()
 
+        # ====================================================================
+        # DYNAMIC DUAL-ROLE AUTHENTICATION ENGINE
+        # ====================================================================
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
             with tab_unlock:
                 pin = st.text_input("Enter 6-Digit Key", type="password", key="vault_pin")
                 if st.button("Unlock Features"):
-                    if verify_user_cloud(v_id, pin):
-                        st.session_state.auth = True
-                        st.rerun()
-                    else:
-                        st.error("Invalid Key for this device.")
+                    if pin.strip():
+                        try:
+                            doc_check = conn.table("doctor_identities").select("*").eq("secret_pin",
+                                                                                       str(pin).strip()).execute()
+                            is_valid_doctor = len(doc_check.data) > 0
+                        except Exception:
+                            is_valid_doctor = False
+
+                        if is_valid_doctor:
+                            st.session_state.is_doctor = True
+                            st.session_state.auth = True
+                            st.success(f"Welcome back, {doc_check.data[0]['doctor_name']}!")
+                            st.rerun()
+                        elif verify_user_cloud(v_id, pin):
+                            st.session_state.is_doctor = False
+                            st.session_state.auth = True
+                            st.rerun()
+                        else:
+                            st.error("Invalid security signature for this terminal sequence.")
             with tab_reg:
                 mail = st.text_input("Email for Key", key="vault_email")
                 if st.button("Generate Key"):
@@ -499,156 +570,295 @@ def main():
                     else:
                         st.error("Invalid Email Structure.")
         else:
-            st.success("✅ Professional Access Active")
-            if st.button("Logout"): st.session_state.auth = False; st.rerun()
-
-            st.divider()
-            st.subheader("Clinical Data Capture")
-
-            file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
-            st.markdown("<p style='text-align: center; margin: 5px 0;'><b>— OR —</b></p>", unsafe_allow_html=True)
-
-            camera_photo = None
-            if not st.session_state.camera_active:
-                if st.button("📸 Open Live Camera Scanner", use_container_width=True):
-                    st.session_state.camera_active = True
+            if st.session_state.is_doctor:
+                st.success("👨‍⚕️ Portal Authorization: Doctor")
+                if st.button("Logout Doctor Account"):
+                    st.session_state.is_doctor = False
+                    st.session_state.auth = False
                     st.rerun()
             else:
-                if st.button("❌ Close Camera", use_container_width=True):
-                    st.session_state.camera_active = False
-                    st.rerun()
+                st.success("✅ Patient Access Active")
+                if st.button("Logout"): st.session_state.auth = False; st.rerun()
 
-                # --- ADVANCED FULL-BLEED OVERLAY CSS INTEGRATION SYSTEM ---
-                st.markdown("""
-                <style>
-                [data-testid="stCameraInput"] { position: relative; width: 100% !important; }
-                [data-testid="stCameraInput"] video { width: 100% !important; height: auto !important; object-fit: cover !important; }
-                [data-testid="stCameraInput"]:has(video)::before {
-                    content: 'ALIGN MEDICINE NAME HERE';
-                    position: absolute; top: 38%; left: 5%; width: 90%; height: 24%;
-                    border: 3px dashed #00FF00; color: #00FF00; display: flex; align-items: center; justify-content: center;
-                    font-size: 13px; font-weight: bold; text-align: center; z-index: 99; pointer-events: none;
-                    background-color: rgba(0, 255, 0, 0.08); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
-                }
-                </style>
-                """, unsafe_allow_html=True)
+                st.divider()
+                st.subheader("Clinical Data Capture")
 
-                camera_photo = st.camera_input("Capture Medicine")
+                file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
+                st.markdown("<p style='text-align: center; margin: 5px 0;'><b>— OR —</b></p>", unsafe_allow_html=True)
+
+                if not st.session_state.camera_active:
+                    if st.button("📸 Open Live Camera Scanner", use_container_width=True):
+                        st.session_state.camera_active = True
+                        st.rerun()
+                else:
+                    if st.button("❌ Close Camera", use_container_width=True):
+                        st.session_state.camera_active = False
+                        st.rerun()
+
+                    st.markdown("""
+                    <style>
+                    [data-testid="stCameraInput"] { position: relative; width: 100% !important; }
+                    [data-testid="stCameraInput"] video { width: 100% !important; height: auto !important; object-fit: cover !important; }
+                    [data-testid="stCameraInput"]:has(video)::before {
+                        content: 'ALIGN MEDICINE NAME HERE';
+                        position: absolute; top: 38%; left: 5%; width: 90%; height: 24%;
+                        border: 3px dashed #00FF00; color: #00FF00; display: flex; align-items: center; justify-content: center;
+                        font-size: 13px; font-weight: bold; text-align: center; z-index: 99; pointer-events: none;
+                        background-color: rgba(0, 255, 0, 0.08); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+
+                    camera_photo = st.camera_input("Capture Medicine")
 
             uploaded_file = camera_photo if camera_photo else file_upload
 
-            if uploaded_file is not None:
+            # ====================================================================
+            # MEDIA SCANNING GATES (CONDITIONAL EXTRACTION EXCLUSION)
+            # ====================================================================
+            if not st.session_state.is_doctor and uploaded_file is not None:
                 file_bytes = uploaded_file.getvalue()
                 file_hash = hashlib.md5(file_bytes).hexdigest()
 
+                # Fix absolute duplicate submission loops over state rebuild triggers
                 if st.session_state.last_processed_file_hash != file_hash:
                     st.session_state.last_processed_file_hash = file_hash
-                    st.session_state.line_diagnostics = []
 
-                    raw_img_array = np.asarray(bytearray(file_bytes), dtype=np.uint8)
-                    raw_img = cv2.imdecode(raw_img_array, cv2.IMREAD_GRAYSCALE)
+                    # BRANCH A: CONSULTATION CHANNEL ACTIVE -> INLINE IMAGE PIPE WITHOUT EXTRACTION HURT
+                    if st.session_state.chat_mode == "doctor_consult":
+                        with st.spinner("Compressing and streaming raw canvas image directly to doctor room..."):
+                            try:
+                                pil_img = Image.open(uploaded_file)
+                                if pil_img.mode in ("RGBA", "P"):
+                                    pil_img = pil_img.convert("RGB")
 
-                    # --- ADVANCED COMPUTER VISION CARD EXTRACTION SCANNER ENGINE ---
-                    # Eliminates layout elements surrounding your screen frame template boundaries automatically
-                    if camera_photo is not None:
-                        # Clean texture threshold pass to separate the bright focused document area
-                        blur_pre = cv2.GaussianBlur(raw_img, (5, 5), 0)
-                        _, thresh_card = cv2.threshold(blur_pre, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                mem_buffer = io.BytesIO()
+                                pil_img.save(mem_buffer, format="JPEG", quality=60)
 
-                        card_contours, _ = cv2.findContours(thresh_card, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                b64_string = base64.b64encode(mem_buffer.getvalue()).decode("utf-8")
+                                b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{b64_string}"
 
-                        best_card_box = None
-                        max_card_area = 0
-                        h_img, w_img = raw_img.shape[:2]
+                                conn.table("doctor_chat_messages").insert({
+                                    "chat_room_id": active_room_id,
+                                    "sender_type": "patient",
+                                    "sender_id": v_id,
+                                    "message_text": b64_payload
+                                }).execute()
+                                st.success("Prescription file successfully shared onto medical consultation channel matrix.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Image pipeline network timeout error sequence: {e}")
 
-                        for cnt in card_contours:
-                            xc, yc, wc, hc = cv2.boundingRect(cnt)
-                            card_area = wc * hc
-                            # The framed target text-strip card is always the dominant horizontal block container on screen
-                            if wc > (w_img * 0.4) and hc > (h_img * 0.1):
-                                if card_area > max_card_area:
-                                    max_card_area = card_area
-                                    best_card_box = (xc, yc, wc, hc)
-
-                        # Fallback failsafe crop layer if edge matrix parameters are wash patterns
-                        if best_card_box is not None:
-                            xc, yc, wc, hc = best_card_box
-                            raw_img = raw_img[yc:yc + hc, xc:xc + wc].copy()
-                        else:
-                            y1 = int(h_img * 0.38)
-                            y2 = int(h_img * 0.62)
-                            x1 = int(w_img * 0.05)
-                            x2 = int(w_img * 0.95)
-                            raw_img = raw_img[y1:y2, x1:x2].copy()
-
-                    raw_img = cv2.adaptiveThreshold(
-                        raw_img, 255,
-                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                        cv2.THRESH_BINARY, 41, 15
-                    )
-
-                    orig_h, orig_w = raw_img.shape[:2]
-                    img_aspect = orig_w / float(orig_h)
-
-                    # --- DYNAMIC ROUTING GATES ---
-                    if camera_photo is not None or img_aspect > 2.2:
-                        with st.spinner("Processing Isolated Target Card..."):
-                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
-                            if text_out.strip():
-                                st.session_state.line_diagnostics = [
-                                    {"text": text_out, "confidence": f"{conf_out:.2f}%"}]
-                                st.session_state.messages.append(
-                                    {"role": "user", "content": f"📋 *[Direct Crop Extraction]:*\n{text_out}"})
-                                response = process_extraction_result(text_out, st.session_state.db_lookup)
-                                st.session_state.messages.append({"role": "assistant", "content": response})
-                            else:
-                                st.error(
-                                    "No legible medical words matched your system database parameters within the isolated region.")
+                    # BRANCH B: ASSISTANT MODE ACTIVE -> INFERENCE CNN/CRNN OCR COMPUTATION ENGINE EXECUTION
                     else:
-                        with st.spinner("Deconstructing Full Page Matrix..."):
-                            extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
+                        st.session_state.line_diagnostics = []
+                        raw_img = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
 
-                            all_discovered_text = []
-                            diags_pool = []
+                        if camera_photo is not None:
+                            blur_pre = cv2.GaussianBlur(raw_img, (5, 5), 0)
+                            _, thresh_card = cv2.threshold(blur_pre, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-                            for slice_block in extracted_slices:
-                                text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(slice_block)
-                                if text_out.strip():
-                                    all_discovered_text.append(text_out)
-                                    diags_pool.append({"text": text_out, "confidence": f"{conf_out:.2f}%"})
+                            card_contours, _ = cv2.findContours(thresh_card, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                            st.session_state.line_diagnostics = diags_pool
-                            ocr_combined_result = "\n".join(all_discovered_text)
+                            best_card_box = None
+                            max_card_area = 0
+                            h_img, w_img = raw_img.shape[:2]
 
-                            if ocr_combined_result.strip():
-                                st.session_state.messages.append(
-                                    {"role": "user",
-                                     "content": f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"})
-                                response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
-                                st.session_state.messages.append({"role": "assistant", "content": response})
+                            for cnt in card_contours:
+                                xc, yc, wc, hc = cv2.boundingRect(cnt)
+                                card_area = wc * hc
+                                if wc > (w_img * 0.4) and hc > (h_img * 0.1):
+                                    if card_area > max_card_area:
+                                        max_card_area = card_area
+                                        best_card_box = (xc, yc, wc, hc)
+
+                            if best_card_box is not None:
+                                xc, yc, wc, hc = best_card_box
+                                raw_img = raw_img[yc:yc + hc, xc:xc + wc].copy()
                             else:
-                                st.error("No valid medicine entries could be identified across the full layout lines.")
+                                y1 = int(h_img * 0.38)
+                                y2 = int(h_img * 0.62)
+                                x1 = int(w_img * 0.05)
+                                x2 = int(w_img * 0.95)
+                                raw_img = raw_img[y1:y2, x1:x2].copy()
 
-            if uploaded_file is not None and st.session_state.line_diagnostics:
-                st.divider()
-                st.subheader("🔬 Document Parser Matrix")
-                for idx, diag in enumerate(st.session_state.line_diagnostics):
-                    st.metric(f"Line Segment #{idx + 1}", diag['text'], delta=diag['confidence'])
+                        raw_img = cv2.adaptiveThreshold(
+                            raw_img, 255,
+                            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                            cv2.THRESH_BINARY, 41, 15
+                        )
 
-    # Main Chat View
-    st.title("💬 AI Health Assistant")
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.markdown(msg["content"])
+                        orig_h, orig_w = raw_img.shape[:2]
+                        img_aspect = orig_w / float(orig_h)
 
-    if prompt := st.chat_input("Enter symptoms (e.g. fever, headache)..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        disease, matched, conf = st.session_state.bot.predict(prompt)
-        if matched:
-            response_text = f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}%)\n\n**Matched Symptoms:** {', '.join(matched).replace('_', ' ')}"
+                        if camera_photo is not None or img_aspect > 2.2:
+                            with st.spinner("Processing Isolated Target Card..."):
+                                text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
+                                if text_out.strip():
+                                    scan_payload = f"📋 *[Direct Crop Extraction]:*\n{text_out}"
+                                    response = process_extraction_result(text_out, st.session_state.db_lookup)
+                                    st.session_state.line_diagnostics = [{"text": text_out, "confidence": f"{conf_out:.2f}%"}]
+
+                                    st.session_state.messages.append({"role": "user", "content": scan_payload})
+                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                                    st.rerun()
+                                else:
+                                    st.error("No legible medical words matched system database parameters within the isolated region.")
+                        else:
+                            with st.spinner("Deconstructing Full Page Matrix..."):
+                                extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
+                                all_discovered_text = []
+                                diags_pool = []
+
+                                for slice_block in extracted_slices:
+                                    text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(slice_block)
+                                    if text_out.strip():
+                                        all_discovered_text.append(text_out)
+                                        diags_pool.append({"text": text_out, "confidence": f"{conf_out:.2f}%"})
+
+                                st.session_state.line_diagnostics = diags_pool
+                                ocr_combined_result = "\n".join(all_discovered_text)
+
+                                if ocr_combined_result.strip():
+                                    scan_payload = f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"
+                                    response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
+
+                                    st.session_state.messages.append({"role": "user", "content": scan_payload})
+                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                                    st.rerun()
+                                else:
+                                    st.error("No valid medicine entries could be identified across the full layout lines.")
+
+                    if uploaded_file is not None and st.session_state.line_diagnostics:
+                        st.divider()
+                        st.subheader("🔬 Document Parser Matrix")
+                        for idx, diag in enumerate(st.session_state.line_diagnostics):
+                            st.metric(f"Line Segment #{idx + 1}", diag['text'], delta=diag['confidence'])
+
+    # ====================================================================
+    # INTERCEPTOR VIEW A: 👨‍⚕️ PRODUCTION DOCTOR INTERACTION PORTAL
+    # ====================================================================
+    if st.session_state.is_doctor:
+        st.title("👨‍⚕️ Medical Professional Consultation Panel")
+
+        try:
+            rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").execute()
+            distinct_rooms = list(set([row['chat_room_id'] for row in rooms_query.data]))
+            users_query = conn.table("user_identities").select("visitor_id, email").execute()
+            identity_map = {row['visitor_id']: row['email'] for row in users_query.data}
+        except Exception:
+            distinct_rooms = []
+            identity_map = {}
+
+        # Segment tracks based on prefix routing
+        verified_rooms = [r for r in distinct_rooms if r.startswith("user_")]
+        guest_rooms = [r for r in distinct_rooms if r.startswith("guest_")]
+
+        # Category Filter Selectors
+        category_tab = st.radio("Select Directory Category",
+                                ["Verified Registered Patients", "Anonymous Guest Consultations"], horizontal=True)
+
+        selected_room = None
+        if category_tab == "Verified Registered Patients":
+            if not verified_rooms:
+                st.info("No active verified patient consultations found.")
+            else:
+                def user_label_mapping(room_key):
+                    raw_uid = room_key.replace("user_", "")
+                    email = identity_map.get(raw_uid)
+                    return f"👤 {email if email else 'Verified Account'} — [ID: ...{str(raw_uid)[-6:]}]"
+
+                selected_room = st.selectbox("Active Verified Channels", verified_rooms, format_func=user_label_mapping)
         else:
-            response_text = "I couldn't recognize those symptoms. Try 'Do you know [Disease]?' to teach me."
-        st.session_state.messages.append({"role": "assistant", "content": response_text})
-        st.rerun()
+            if not guest_rooms:
+                st.info("No active temporary guest sessions detected.")
+            else:
+                def guest_label_mapping(room_key):
+                    raw_gid = room_key.replace("guest_", "")
+                    return f"⏳ Unverified Guest Session — [Terminal Reference: ...{str(raw_gid)[-6:]}]"
+
+                selected_room = st.selectbox("Active Guest Channels", guest_rooms, format_func=guest_label_mapping)
+
+        if selected_room:
+            st.caption(f"🔄 Live Stream Active: Syncing channel records `({selected_room})` every 5 seconds...")
+            st.divider()
+
+            # Invoke isolated background sync module
+            live_chat_stream(selected_room, view_role="doctor")
+
+            if doc_prompt := st.chat_input("Type professional medical guidance details or upload feedback..."):
+                try:
+                    conn.table("doctor_chat_messages").insert({
+                        "chat_room_id": selected_room,
+                        "sender_type": "doctor",
+                        "sender_id": "attending_practitioner",
+                        "message_text": doc_prompt
+                    }).execute()
+                    st.rerun()
+                except Exception as send_err:
+                    st.error(f"Message delivery failed: {send_err}")
+
+    # ====================================================================
+    # INTERCEPTOR VIEW B: 👤 PRODUCTION PATIENT SYSTEM INTERFACE
+    # ====================================================================
+    else:
+        st.title("💬 AI Health Assistant")
+
+        if st.session_state.chat_mode == "ai_assistant":
+            btn_label = "%s" % (
+                "🩺 Connect Live to Doctor (As Logged Patient)" if st.session_state.auth else "🩺 Connect Live to Doctor (As Guest Client)")
+            if st.button(btn_label, use_container_width=True, type="primary"):
+                st.session_state.chat_mode = "doctor_consult"
+                try:
+                    conn.table("doctor_chat_messages").insert({
+                        "chat_room_id": active_room_id,
+                        "sender_type": "patient",
+                        "sender_id": v_id,
+                        "message_text": f"🚨 [System Alert]: Room initiated. Channel Status: {room_prefix.replace('_', '').upper()}"
+                    }).execute()
+                except Exception:
+                    pass
+                st.rerun()
+        else:
+            if st.button("🔴 Terminate Live Doctor Link (Return to AI Assistant Mode)", use_container_width=True):
+                st.session_state.chat_mode = "ai_assistant"
+                st.rerun()
+
+        st.divider()
+
+        if st.session_state.chat_mode == "doctor_consult":
+            st.caption(f"🔄 Live Stream Active: Connected under route key `{active_room_id}` (Polling every 5s)")
+            st.divider()
+
+            # Invoke isolated background sync module
+            live_chat_stream(active_room_id, view_role="patient")
+            chat_placeholder = "Type message directly to your online attending doctor..."
+        else:
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]): st.markdown(msg["content"])
+            chat_placeholder = "Enter symptoms (e.g. fever, headache)..."
+
+        if prompt := st.chat_input(chat_placeholder):
+            if st.session_state.chat_mode == "doctor_consult":
+                try:
+                    conn.table("doctor_chat_messages").insert({
+                        "chat_room_id": active_room_id,
+                        "sender_type": "patient",
+                        "sender_id": v_id,
+                        "message_text": prompt
+                    }).execute()
+                except Exception as p_err:
+                    st.error(f"Transmission failure: {p_err}")
+                st.rerun()
+            else:
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                disease, matched, conf = st.session_state.bot.predict(prompt)
+                if matched:
+                    response_text = f"**Suspected Diagnosis:** {disease.upper()} ({conf:.1f}%)\n\n**Matched Symptoms:** {', '.join(matched).replace('_', ' ')}"
+                else:
+                    response_text = "I couldn't recognize those symptoms. Try 'Do you know [Disease]?' to teach me."
+                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                st.rerun()
 
 
 if __name__ == "__main__":
