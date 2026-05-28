@@ -412,13 +412,13 @@ class MedicalAI:
         for t in tokens:
             m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
             if m:
-                input_dict[m[0]] = 1;
+                input_dict[m[0]] = 1
                 matched.append(m[0])
             else:
                 for k in self.known_symptoms:
                     if t in k.replace("_", " ") or k.replace("_", " ") in t:
-                        input_dict[k] = 1;
-                        matched.append(k);
+                        input_dict[k] = 1
+                        matched.append(k)
                         break
 
         if not matched: return None, [], 0
@@ -484,6 +484,15 @@ def main():
                         st.rerun()
                     else:
                         st.error("Invalid Key for this device.")
+            with tab_reg:
+                mail = st.text_input("Email for Key", key="vault_email")
+                if st.button("Generate Key"):
+                    if "@" in mail:
+                        k = generate_permanent_key(mail)
+                        if save_user_cloud(v_id, mail, k):
+                            st.success(f"Permanent Key: **{k}**")
+                    else:
+                        st.error("Invalid Email Structure.")
         else:
             st.success("✅ Professional Access Active")
             if st.button("Logout"): st.session_state.auth = False; st.rerun()
@@ -542,25 +551,24 @@ def main():
                         x1 = int(w_orig * 0.05)
                         x2 = int(w_orig * 0.95)
 
-                        # Isolate the interior box array
+                        # Step 1: Slice out the interior box array matching green overlay dimensions
                         target_box = raw_img[y1:y2, x1:x2].copy()
 
-                        # Run a Gaussian binarization pass to isolate the dark ink strokes
+                        # Step 2: Use Adaptive Thresholding to capture handwritten ink stroke clusters
                         blur_box = cv2.GaussianBlur(target_box, (3, 3), 0)
                         thresh_box = cv2.adaptiveThreshold(
                             blur_box, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                             cv2.THRESH_BINARY_INV, 25, 9
                         )
 
-                        # Blacken ink strokes default and drop all outer layout regions to pure canvas white
+                        # Step 3: Turn foreground text ink directly to high-contrast digital black
                         processed_target = cv2.bitwise_not(thresh_box)
 
-                        # Create an exact-dimension canvas filled with model-native pure white
+                        # Step 4: Create a clean canvas masked to pure model-native white background layout
                         raw_img = np.ones((h_orig, w_orig), dtype=np.uint8) * 255
-                        # Inject the isolated high-contrast black ink channel back into the precise array position
                         raw_img[y1:y2, x1:x2] = processed_target
                     else:
-                        # Baseline report filtering pass
+                        # Adaptive binarization pass for file uploads
                         raw_img = cv2.adaptiveThreshold(
                             raw_img, 255,
                             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -573,7 +581,6 @@ def main():
                     # --- DYNAMIC ROUTING MATRIX GATES ---
                     if camera_photo is not None or img_aspect > 2.2:
                         with st.spinner("Processing Exact Normalization Layer..."):
-                            # If captured via custom camera, slice the pristine white-padded target box back out cleanly
                             if camera_photo is not None:
                                 pass_img = raw_img[y1:y2, x1:x2].copy()
                             else:
