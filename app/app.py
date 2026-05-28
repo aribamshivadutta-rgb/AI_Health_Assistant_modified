@@ -412,13 +412,13 @@ class MedicalAI:
         for t in tokens:
             m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
             if m:
-                input_dict[m[0]] = 1
+                input_dict[m[0]] = 1;
                 matched.append(m[0])
             else:
                 for k in self.known_symptoms:
                     if t in k.replace("_", " ") or k.replace("_", " ") in t:
-                        input_dict[k] = 1
-                        matched.append(k)
+                        input_dict[k] = 1;
+                        matched.append(k);
                         break
 
         if not matched: return None, [], 0
@@ -495,8 +495,7 @@ def main():
                 if st.button("Generate Key"):
                     if "@" in mail:
                         k = generate_permanent_key(mail)
-                        if save_user_cloud(v_id, mail, k):
-                            st.success(f"Permanent Key: **{k}**")
+                        if save_user_cloud(v_id, mail, k): st.success(f"Permanent Key: **{k}**")
                     else:
                         st.error("Invalid Email Structure.")
         else:
@@ -549,50 +548,52 @@ def main():
                     raw_img_array = np.asarray(bytearray(file_bytes), dtype=np.uint8)
                     raw_img = cv2.imdecode(raw_img_array, cv2.IMREAD_GRAYSCALE)
 
-                    # --- ADVANCED COMPUTER VISION ISOLATION MASK ENGINE ---
+                    # --- ADVANCED COMPUTER VISION CARD EXTRACTION SCANNER ENGINE ---
+                    # Eliminates layout elements surrounding your screen frame template boundaries automatically
                     if camera_photo is not None:
-                        h_orig, w_orig = raw_img.shape[:2]
-                        y1 = int(h_orig * 0.38)
-                        y2 = int(h_orig * 0.62)
-                        x1 = int(w_orig * 0.05)
-                        x2 = int(w_orig * 0.95)
+                        # Clean texture threshold pass to separate the bright focused document area
+                        blur_pre = cv2.GaussianBlur(raw_img, (5, 5), 0)
+                        _, thresh_card = cv2.threshold(blur_pre, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-                        # Step 1: Slice out the interior box array matching green overlay dimensions
-                        target_box = raw_img[y1:y2, x1:x2].copy()
+                        card_contours, _ = cv2.findContours(thresh_card, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                        # Step 2: Use Adaptive Thresholding to capture handwritten ink stroke clusters
-                        blur_box = cv2.GaussianBlur(target_box, (3, 3), 0)
-                        thresh_box = cv2.adaptiveThreshold(
-                            blur_box, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                            cv2.THRESH_BINARY_INV, 25, 9
-                        )
+                        best_card_box = None
+                        max_card_area = 0
+                        h_img, w_img = raw_img.shape[:2]
 
-                        # Step 3: Turn foreground text ink directly to high-contrast digital black
-                        processed_target = cv2.bitwise_not(thresh_box)
+                        for cnt in card_contours:
+                            xc, yc, wc, hc = cv2.boundingRect(cnt)
+                            card_area = wc * hc
+                            # The framed target text-strip card is always the dominant horizontal block container on screen
+                            if wc > (w_img * 0.4) and hc > (h_img * 0.1):
+                                if card_area > max_card_area:
+                                    max_card_area = card_area
+                                    best_card_box = (xc, yc, wc, hc)
 
-                        # Step 4: Create a clean canvas masked to pure model-native white background layout
-                        raw_img = np.ones((h_orig, w_orig), dtype=np.uint8) * 255
-                        raw_img[y1:y2, x1:x2] = processed_target
-                    else:
-                        # Adaptive binarization pass for file uploads
-                        raw_img = cv2.adaptiveThreshold(
-                            raw_img, 255,
-                            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                            cv2.THRESH_BINARY, 41, 15
-                        )
+                        # Fallback failsafe crop layer if edge matrix parameters are wash patterns
+                        if best_card_box is not None:
+                            xc, yc, wc, hc = best_card_box
+                            raw_img = raw_img[yc:yc + hc, xc:xc + wc].copy()
+                        else:
+                            y1 = int(h_img * 0.38)
+                            y2 = int(h_img * 0.62)
+                            x1 = int(w_img * 0.05)
+                            x2 = int(w_img * 0.95)
+                            raw_img = raw_img[y1:y2, x1:x2].copy()
+
+                    raw_img = cv2.adaptiveThreshold(
+                        raw_img, 255,
+                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv2.THRESH_BINARY, 41, 15
+                    )
 
                     orig_h, orig_w = raw_img.shape[:2]
                     img_aspect = orig_w / float(orig_h)
 
-                    # --- DYNAMIC ROUTING MATRIX GATES ---
+                    # --- DYNAMIC ROUTING GATES ---
                     if camera_photo is not None or img_aspect > 2.2:
-                        with st.spinner("Processing Exact Normalization Layer..."):
-                            if camera_photo is not None:
-                                pass_img = raw_img[y1:y2, x1:x2].copy()
-                            else:
-                                pass_img = raw_img
-
-                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(pass_img)
+                        with st.spinner("Processing Isolated Target Card..."):
+                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
                             if text_out.strip():
                                 st.session_state.line_diagnostics = [
                                     {"text": text_out, "confidence": f"{conf_out:.2f}%"}]
@@ -601,7 +602,8 @@ def main():
                                 response = process_extraction_result(text_out, st.session_state.db_lookup)
                                 st.session_state.messages.append({"role": "assistant", "content": response})
                             else:
-                                st.error("No legible tokens matched your system database records.")
+                                st.error(
+                                    "No legible medical words matched your system database parameters within the isolated region.")
                     else:
                         with st.spinner("Deconstructing Full Page Matrix..."):
                             extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
