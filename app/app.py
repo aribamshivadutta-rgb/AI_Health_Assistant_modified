@@ -23,6 +23,7 @@ import pandas as pd
 import joblib
 from tqdm import tqdm
 import streamlit as st
+import streamlit.components.v1 as components  # Added explicitly for client-side HTML canvas execution
 from pdf2image import convert_from_bytes
 from rapidfuzz import process, fuzz, distance
 from st_supabase_connection import SupabaseConnection
@@ -349,10 +350,8 @@ class OCRReaderPipeline:
                 text_lower = decoded_line.lower()
 
             match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
-            if match and match[1] >= 82.0:
+            if match and match[1] >= 45.0:
                 decoded_line = match[0]
-            else:
-                return "", 0.0
 
             return decoded_line, line_confidence
 
@@ -414,13 +413,13 @@ class MedicalAI:
         for t in tokens:
             m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
             if m:
-                input_dict[m[0]] = 1;
+                input_dict[m[0]] = 1
                 matched.append(m[0])
             else:
                 for k in self.known_symptoms:
                     if t in k.replace("_", " ") or k.replace("_", " ") in t:
-                        input_dict[k] = 1;
-                        matched.append(k);
+                        input_dict[k] = 1
+                        matched.append(k)
                         break
 
         if not matched: return None, [], 0
@@ -430,18 +429,44 @@ class MedicalAI:
 
 
 # ====================================================================
-# 6. STREAMLIT APPLICATION LOGIC
+# 6. STREAMLIT APPLICATION LOGIC & DYNAMIC MAP ASSET LOADER
 # ====================================================================
 def process_extraction_result(ocr_text, db_lookup):
     db_insights = ""
     for line in ocr_text.split("\n"):
-        if len(line.strip()) <= 2: continue
-        med_info = fetch_medicine_details_fast(line.strip(), db_lookup)
-        if med_info: db_insights += f"💊 **{line.strip()}**\n* 👉 **Generic:** {med_info.get('Generic Name', 'N/A')}\n* 👉 **Purpose:** {med_info.get('Use/Purpose', 'N/A')}\n\n"
+        clean_line = line.strip()
+        if len(clean_line) <= 2: continue
+        med_info = fetch_medicine_details_fast(clean_line, db_lookup)
+        if med_info:
+            generic_name = med_info.get('Generic Name') or med_info.get('Generic') or 'N/A'
+            purpose_text = med_info.get('Use/Purpose') or med_info.get('Purpose') or 'N/A'
+            side_effects = med_info.get('Common Side Effects') or 'N/A'
+            manufacturer = med_info.get('Manufacturer') or 'N/A'
+
+            db_insights += f"💊 **{clean_line}**\n" \
+                           f"* 👉 **Generic:** {generic_name}\n" \
+                           f"* 👉 **Purpose:** {purpose_text}\n" \
+                           f"* 👉 **Side Effects:** {side_effects}\n" \
+                           f"* 👉 **Manufacturer:** {manufacturer}\n\n"
 
     response = "✅ Medicines extracted securely via Normalized Matrix."
     if db_insights: response += f"\n\n📚 **Database Matches:**\n\n{db_insights}"
     return response
+
+
+def embed_hospital_finder():
+    """
+    Decoupled interface component engine. Reads the production hospital_finder.html
+    template mapping string directly from the file workspace to prevent frame reset crashes.
+    """
+    html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
+
+    if os.path.exists(html_path):
+        with open(html_path, "r", encoding="utf-8") as f:
+            html_code = f.read()
+        components.html(html_code, height=340, scrolling=True)
+    else:
+        st.error("Hospital finder core engine template target execution canvas mapping missing.")
 
 
 # ====================================================================
@@ -449,11 +474,6 @@ def process_extraction_result(ocr_text, db_lookup):
 # ====================================================================
 @st.fragment(run_every=5)
 def live_chat_stream(room_id, view_role):
-    """
-    Isolates database tracking rules to prevent full-page resets,
-    preserving keyboard text box focus during messaging cycles.
-    Supports inline rendering of Base64 prescription image segments.
-    """
     try:
         chat_query = conn.table("doctor_chat_messages").select("*").eq("chat_room_id", room_id).order("created_at",
                                                                                                       desc=False).execute()
@@ -507,13 +527,11 @@ def main():
     if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
     if 'camera_active' not in st.session_state: st.session_state.camera_active = False
 
-    # Dynamic fail-safe declaration prevents scope compilation crashes across different routing tables
     file_upload = None
     camera_photo = None
 
     v_id = get_visitor_id()
 
-    # PREFIX ROUTING ASSIGNMENTS (Separates guest traffic channels fundamentally from logged profiles)
     room_prefix = "user_" if st.session_state.auth else "guest_"
     active_room_id = f"{room_prefix}{v_id}"
 
@@ -533,9 +551,6 @@ def main():
 
         st.divider()
 
-        # ====================================================================
-        # DYNAMIC DUAL-ROLE AUTHENTICATION ENGINE
-        # ====================================================================
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
@@ -613,18 +628,13 @@ def main():
 
             uploaded_file = camera_photo if camera_photo else file_upload
 
-            # ====================================================================
-            # MEDIA SCANNING GATES (CONDITIONAL EXTRACTION EXCLUSION)
-            # ====================================================================
             if not st.session_state.is_doctor and uploaded_file is not None:
                 file_bytes = uploaded_file.getvalue()
                 file_hash = hashlib.md5(file_bytes).hexdigest()
 
-                # Fix absolute duplicate submission loops over state rebuild triggers
                 if st.session_state.last_processed_file_hash != file_hash:
                     st.session_state.last_processed_file_hash = file_hash
 
-                    # BRANCH A: CONSULTATION CHANNEL ACTIVE -> INLINE IMAGE PIPE WITHOUT EXTRACTION HURT
                     if st.session_state.chat_mode == "doctor_consult":
                         with st.spinner("Compressing and streaming raw canvas image directly to doctor room..."):
                             try:
@@ -644,12 +654,12 @@ def main():
                                     "sender_id": v_id,
                                     "message_text": b64_payload
                                 }).execute()
-                                st.success("Prescription file successfully shared onto medical consultation channel matrix.")
+                                st.success(
+                                    "Prescription file successfully shared onto medical consultation channel matrix.")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Image pipeline network timeout error sequence: {e}")
 
-                    # BRANCH B: ASSISTANT MODE ACTIVE -> INFERENCE CNN/CRNN OCR COMPUTATION ENGINE EXECUTION
                     else:
                         st.session_state.line_diagnostics = []
                         raw_img = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
@@ -697,13 +707,15 @@ def main():
                                 if text_out.strip():
                                     scan_payload = f"📋 *[Direct Crop Extraction]:*\n{text_out}"
                                     response = process_extraction_result(text_out, st.session_state.db_lookup)
-                                    st.session_state.line_diagnostics = [{"text": text_out, "confidence": f"{conf_out:.2f}%"}]
+                                    st.session_state.line_diagnostics = [
+                                        {"text": text_out, "confidence": f"{conf_out:.2f}%"}]
 
                                     st.session_state.messages.append({"role": "user", "content": scan_payload})
                                     st.session_state.messages.append({"role": "assistant", "content": response})
                                     st.rerun()
                                 else:
-                                    st.error("No legible medical words matched system database parameters within the isolated region.")
+                                    st.error(
+                                        "No legible medical words matched system database parameters within the isolated region.")
                         else:
                             with st.spinner("Deconstructing Full Page Matrix..."):
                                 extracted_slices = st.session_state.ocr_pipeline.segment_full_prescription(raw_img)
@@ -721,13 +733,14 @@ def main():
 
                                 if ocr_combined_result.strip():
                                     scan_payload = f"📋 *[Document Scan Extraction]:*\n{ocr_combined_result}"
-                                    response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
+                                    response = process_extraction_result(ocr_combined_result,
+                                                                         st.session_state.db_lookup)
 
                                     st.session_state.messages.append({"role": "user", "content": scan_payload})
                                     st.session_state.messages.append({"role": "assistant", "content": response})
                                     st.rerun()
                                 else:
-                                    st.error("No valid medicine entries could be identified across the full layout lines.")
+                                    st.error("No valid medical entries could be identified across the layout.")
 
                     if uploaded_file is not None and st.session_state.line_diagnostics:
                         st.divider()
@@ -750,11 +763,9 @@ def main():
             distinct_rooms = []
             identity_map = {}
 
-        # Segment tracks based on prefix routing
         verified_rooms = [r for r in distinct_rooms if r.startswith("user_")]
         guest_rooms = [r for r in distinct_rooms if r.startswith("guest_")]
 
-        # Category Filter Selectors
         category_tab = st.radio("Select Directory Category",
                                 ["Verified Registered Patients", "Anonymous Guest Consultations"], horizontal=True)
 
@@ -783,7 +794,6 @@ def main():
             st.caption(f"🔄 Live Stream Active: Syncing channel records `({selected_room})` every 5 seconds...")
             st.divider()
 
-            # Invoke isolated background sync module
             live_chat_stream(selected_room, view_role="doctor")
 
             if doc_prompt := st.chat_input("Type professional medical guidance details or upload feedback..."):
@@ -819,6 +829,14 @@ def main():
                 except Exception:
                     pass
                 st.rerun()
+
+            # Integrated full-width expandable component tracker module
+            with st.expander("🚨 EMERGENCY Toolkit: Find Nearest Hospitals", expanded=False):
+                st.markdown(
+                    '<small style="color:#666;">Scans local coordinate parameters directly via your browser\'s native device GPS hardware API wrapper.</small>',
+                    unsafe_allow_html=True)
+                embed_hospital_finder()
+
         else:
             if st.button("🔴 Terminate Live Doctor Link (Return to AI Assistant Mode)", use_container_width=True):
                 st.session_state.chat_mode = "ai_assistant"
@@ -830,7 +848,6 @@ def main():
             st.caption(f"🔄 Live Stream Active: Connected under route key `{active_room_id}` (Polling every 5s)")
             st.divider()
 
-            # Invoke isolated background sync module
             live_chat_stream(active_room_id, view_role="patient")
             chat_placeholder = "Type message directly to your online attending doctor..."
         else:

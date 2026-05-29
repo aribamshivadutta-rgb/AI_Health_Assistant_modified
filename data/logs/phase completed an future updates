@@ -79,10 +79,13 @@ added (05/15/2026)
 3. train_traffic_router.py, dataset from https://data.mendeley.com/datasets/dsb5r6vskg/3,https://www.kaggle.com/datasets/itachi9604/disease-symptom-description-dataset,https://www.kaggle.com/datasets/louiscia/transcription-samples-mtsamples
  to be added
  1. get Crnn model to get higher accuracy (accuracy about 70%)
- 2. fix u  -net to read piscription
+ 2. fix u  -net to read piscription Crop functionality added for easier detect still under process)
  3. add a way to mapp the medicine from document to the info (done)
  4. pdf file not loading
  5. improve chat functionality (optional)
  6. add a way to capture images from phone
  7. need to fix randomly getting disease info from medicine name
+ 8. data not found fixed (done) online version
+ 9. add a way user can talk to real doc and allow doc to view the patient documents
+
 

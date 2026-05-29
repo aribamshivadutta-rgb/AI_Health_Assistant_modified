@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.css" />
+
+  <style>
+    .container { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 5px; position: relative; }
+    .control-panel { display: flex; gap: 8px; margin-bottom: 10px; }
+    button {
+      color: white; border: none; padding: 12px 16px; font-size: 14px;
+      border-radius: 8px; cursor: pointer; font-weight: 600; flex: 1;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.2s;
+    }
+    #search-btn { background-color: #ff4b4b; }
+    #search-btn:hover { background-color: #e04343; }
+    #stop-btn { background-color: #31333F; display: none; }
+    #stop-btn:hover { background-color: #1f2129; }
+
+    #nav-prompt-box {
+      display: none; background-color: #ffffff; border: 1px solid #ff4b4b;
+      border-radius: 8px; padding: 12px; margin-bottom: 10px;
+      box-shadow: 0 4px 12px rgba(255,75,75,0.15);
+      animation: slideDown 0.3s ease-out;
+    }
+    .prompt-header { font-weight: bold; font-size: 14px; color: #31333F; margin-bottom: 4px; }
+    .prompt-buttons { display: flex; gap: 8px; margin-top: 8px; }
+    .btn-yes { background-color: #28a745; padding: 8px 12px; font-size: 13px; }
+    .btn-yes:hover { background-color: #218838; }
+    .btn-no { background-color: #6c757d; padding: 8px 12px; font-size: 13px; }
+    .btn-no:hover { background-color: #5a6268; }
+
+    #status-card {
+      background-color: #f0f2f6; border-radius: 8px; padding: 10px;
+      margin-bottom: 10px; font-size: 13px; color: #31333F; border-left: 4px solid #ff4b4b;
+    }
+    .metrics { display: flex; justify-content: space-between; font-weight: bold; margin-top: 4px; }
+
+    #map-wrapper { display: flex; flex-direction: column; gap: 10px; }
+    #map { height: 260px; width: 100%; border-radius: 8px; border: 1px solid #f0f2f6; display: none; }
+
+    /* Custom override removes bulky default text instruction panels from covering the small map viewport */
+    .leaflet-routing-container { display: none !important; }
+
+    .card-list { max-height: 160px; overflow-y: auto; margin-top: 5px; }
+    .card {
+      border: 1px solid #f0f2f6; border-radius: 6px; padding: 10px;
+      margin-bottom: 6px; background-color: #f8f9fa; cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .card:hover { background-color: #f1f3f5; }
+    .name { font-weight: 600; color: #31333F; font-size: 13px; }
+    .dist { color: #28a745; font-size: 11px; margin-top: 2px; font-weight: bold; }
+
+    @keyframes slideDown {
+      from { transform: translateY(-10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="control-panel">
+      <button id="search-btn" onclick="scanNearbyGrid()">📡 Scan Nearby Hospitals</button>
+      <button id="stop-btn" onclick="terminateLiveNavigation()">🛑 Stop Navigation Path</button>
+    </div>
+
+    <div id="nav-prompt-box">
+      <div class="prompt-header" id="prompt-title">Target Hospital Locked</div>
+      <div style="font-size: 12px; color: #555;">Do you want to initialize your live progress path route to this facility?</div>
+      <div class="prompt-buttons">
+        <button class="btn-yes" id="confirm-nav-btn">Yes, Start Progress Path</button>
+        <button class="btn-no" onclick="dismissNavigationPrompt()">Cancel</button>
+      </div>
+    </div>
+
+    <div id="status-card">
+      <div id="status-text">System dormant. Scan workspace grid parameters...</div>
+      <div class="metrics" id="telemetry-metrics" style="display: none;">
+        <span>Path Progress: <span id="odometer-val">0.000 km</span></span>
+        <span>Signal: <span id="accuracy-val">±0m</span></span>
+      </div>
+    </div>
+
+    <div id="map-wrapper">
+      <div id="map"></div>
+      <div id="results" class="card-list"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.js"></script>
+
+  <script>
+    let map = null;
+    let userMarker = null;
+    let markerGroup = null;
+    let routingControl = null; // Replaces simple polyline structures with a full mapping machine context
+    let watchId = null;
+
+    let userLat = null;
+    let userLon = null;
+    let totalDistanceTraveled = 0;
+    let lastPositionCheckpoint = null;
+    let discoveredHospitals = [];
+    let selectedHospitalTarget = null;
+
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function scanNearbyGrid() {
+      const statusText = document.getElementById('status-text');
+      statusText.innerText = "Accessing terminal satellite positioning coordinates...";
+
+      if (!navigator.geolocation) {
+        statusText.innerText = "Location hardware blocked by browser context.";
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        userLat = pos.coords.latitude;
+        userLon = pos.coords.longitude;
+        statusText.innerText = "Fetching local hospital infrastructure data (5km)...";
+
+        const url = `https://overpass-api.de/api/interpreter?data=[out:json];nwr(around:5000,${userLat},${userLon})["amenity"="hospital"];out center;`;
+        try {
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.elements) {
+            discoveredHospitals = data.elements.map(e => ({
+              name: e.tags.name || e.tags.operator || "Emergency Medical Unit",
+              lat: e.lat || (e.center ? e.center.lat : null),
+              lon: e.lon || (e.center ? e.center.lon : null)
+            })).filter(h => h.lat && h.lon);
+
+            renderBaseMapAndCards();
+            statusText.innerText = `Scan complete. Discovered ${discoveredHospitals.length} target facilities nearby.`;
+          }
+        } catch(e) {
+          statusText.innerText = "Network pipeline failure reading OpenStreetMap index.";
+        }
+      }, () => {
+        statusText.innerText = "GPS signal request timed out or was rejected.";
+      }, { enableHighAccuracy: true });
+    }
+
+    function renderBaseMapAndCards() {
+      const mapDiv = document.getElementById('map');
+      const resDiv = document.getElementById('results');
+      mapDiv.style.display = "block";
+      resDiv.innerHTML = "";
+
+      if (map === null) {
+        map = L.map('map').setView([userLat, userLon], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+        markerGroup = L.layerGroup().addTo(map);
+        userMarker = L.circleMarker([userLat, userLon], { radius: 8, color: '#ffffff', fillColor: '#007bff', fillOpacity: 1, weight: 2 }).addTo(map);
+      } else {
+        map.setView([userLat, userLon], 14);
+        markerGroup.clearLayers();
+        cleanActiveRoutingEngine();
+      }
+
+      let sorted = discoveredHospitals.map(h => ({
+        ...h,
+        currentDist: haversine(userLat, userLon, h.lat, h.lon)
+      })).sort((a,b) => a.currentDist - b.currentDist);
+
+      sorted.forEach((h, idx) => {
+        const marker = L.marker([h.lat, h.lon]).addTo(markerGroup).bindPopup(`<b>${h.name}</b>`);
+        marker.on('click', () => { triggerNavigationPrompt(h); });
+
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="name">${idx + 1}. ${h.name}</div>
+          <div class="dist">📍 ${h.currentDist.toFixed(2)} km away</div>
+        `;
+        card.onclick = () => {
+          map.flyTo([h.lat, h.lon], 15, { animate: true, duration: 1 });
+          triggerNavigationPrompt(h);
+        };
+        resDiv.appendChild(card);
+      });
+
+      setTimeout(() => { map.invalidateSize(); }, 200);
+    }
+
+    function triggerNavigationPrompt(hospital) {
+      selectedHospitalTarget = hospital;
+      document.getElementById('prompt-title').innerText = `Locked Target: ${hospital.name}`;
+      document.getElementById('nav-prompt-box').style.display = "block";
+      document.getElementById('confirm-nav-btn').onclick = () => { startActivePathTracking(hospital); };
+    }
+
+    function dismissNavigationPrompt() {
+      document.getElementById('nav-prompt-box').style.display = "none";
+      selectedHospitalTarget = null;
+    }
+
+    function cleanActiveRoutingEngine() {
+      if (routingControl !== null) {
+        map.removeControl(routingControl);
+        routingControl = null;
+      }
+    }
+
+    function startActivePathTracking(hospital) {
+      激startBtn = document.getElementById('search-btn').style.display = "none";
+      document.getElementById('stop-btn').style.display = "block";
+      document.getElementById('telemetry-metrics').style.display = "flex";
+      document.getElementById('results').style.display = "none";
+      dismissNavigationPrompt();
+
+      totalDistanceTraveled = 0;
+      lastPositionCheckpoint = { lat: userLat, lon: userLon };
+
+      markerGroup.clearLayers();
+      cleanActiveRoutingEngine();
+
+      // 🗺️ INITIALIZE ROUTING MACHINE CONTROL LAYER VIA REAL STREETS
+      routingControl = L.Routing.control({
+        waypoints: [
+          L.latLng(userLat, userLon),
+          L.latLng(hospital.lat, hospital.lon)
+        ],
+        router: L.Routing.osrmv1({
+          serviceUrl: 'https://router.project-osrm.org/route/v1' // High-performance free public OSRM gateway routing endpoint
+        }),
+        lineOptions: {
+          styles: [{ color: '#007bff', opacity: 0.8, weight: 6 }] // High-visibility tracking line styling definitions
+        },
+        createMarker: function() { return null; }, // Suppress default markers since we use custom styles
+        fitSelectedRoutes: true
+      }).addTo(map);
+
+      // Explicit target marker representation placement
+      L.marker([hospital.lat, hospital.lon]).addTo(markerGroup)
+        .bindPopup(`<b>Navigation Path Target Destination:</b><br>${hospital.name}`).openPopup();
+
+      watchId = navigator.geolocation.watchPosition((pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        const acc = pos.coords.accuracy;
+
+        document.getElementById('accuracy-val').innerText = `±${Math.round(acc)}m`;
+        userMarker.setLatLng([lat, lon]);
+
+        const delta = haversine(lastPositionCheckpoint.lat, lastPositionCheckpoint.lon, lat, lon);
+        if (delta > 0.003 && acc < 25) {
+          totalDistanceTraveled += delta;
+          document.getElementById('odometer-val').innerText = `${totalDistanceTraveled.toFixed(3)} km`;
+          lastPositionCheckpoint = { lat: lat, lon: lon };
+
+          // Re-adjust routing anchors dynamically to follow user coordinates on the road mesh
+          if (routingControl !== null) {
+            routingControl.setWaypoints([
+              L.latLng(lat, lon),
+              L.latLng(hospital.lat, hospital.lon)
+            ]);
+          }
+        }
+
+        const remainingDist = haversine(lat, lon, hospital.lat, hospital.lon);
+        document.getElementById('status-text').innerHTML = `🚙 <b>Navigation Path Active.</b> Straight-line distance: <b>${remainingDist.toFixed(2)} km</b>`;
+
+        if (remainingDist < 0.015) {
+          document.getElementById('status-text').innerHTML = "🎉 <b>Arrived! Destination checkpoint successfully reached.</b>";
+          terminateLiveNavigation();
+        }
+      }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+    }
+
+    function terminateLiveNavigation() {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+      document.getElementById('search-btn').style.display = "block";
+      document.getElementById('stop-btn').style.display = "none";
+      document.getElementById('telemetry-metrics').style.display = "none";
+      document.getElementById('results').style.display = "block";
+      document.getElementById('status-text').innerText = "Navigation pathway reset. Map interface unlocked.";
+      cleanActiveRoutingEngine();
+      scanNearbyGrid();
+    }
+  </script>
+</body>
+</html>
