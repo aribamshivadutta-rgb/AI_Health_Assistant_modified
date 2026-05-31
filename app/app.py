@@ -560,18 +560,26 @@ class MedicalAI:
         return False, "Verification complete. No new distinct components found."
 
     def predict(self, user_input):
+        """
+        🟢 RESTORED HIGH-ACCURACY MULTI-SPLIT TOKENIZER MATRIX:
+        Splits input tokens securely using structural regular expression rules across both
+        commas and clinical conversational conjunction fillers ('and'). Prevents compound symptom strings
+        from dropping below similarity validation margins.
+        """
         if self.model is None or self.le is None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
 
-        cleaned = re.sub(r'\b(and|or|I have|feeling|my|is)\b', '', user_input, flags=re.IGNORECASE)
-        tokens = [s.strip().replace(" ", "_").lower() for s in cleaned.split(",")]
-        if len(tokens) == 1 and " " in user_input.strip():
-            tokens = [s.strip().replace(" ", "_").lower() for s in user_input.split(" ")]
+        # Pre-clean conversational grammar fillers out of syntax pool
+        cleaned = re.sub(r'\b(I have|feeling|my|is)\b', '', user_input, flags=re.IGNORECASE)
+
+        # Split tokens dynamically matching commas OR the absolute boundary word 'and'
+        raw_tokens = re.split(r',|\band\b', cleaned, flags=re.IGNORECASE)
+        tokens = [t.strip().replace(" ", "_").lower() for t in raw_tokens if t.strip()]
 
         input_dict = {col: 0 for col in self.known_symptoms}
         matched = []
         for t in tokens:
-            m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.55)
+            m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
             if m:
                 input_dict[m[0]] = 1
                 matched.append(m[0])
@@ -825,7 +833,7 @@ def main():
                     st.session_state.selected_room = None
                     st.rerun()
             else:
-                st.success(f"Access Active")
+                st.success(f"✅ Access Active")
                 if st.button("Logout"):
                     st.session_state.auth = False
                     st.session_state.active_patient_email = None
@@ -945,13 +953,10 @@ def main():
         if st.session_state.chat_mode == "doctor_consult":
             live_chat_stream(active_room_id, view_role="patient", active_v_id=v_id)
         else:
-            # 🟢 FIXED: Re-allocated the primary chat list identifier to use explicit keys
-            # effectively decoupling predictions from background asynchronous fragment callbacks.
-            for idx, msg in enumerate(st.session_state.messages):
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-            if prompt := st.chat_input("Enter symptoms or ask 'Do you know Malaria?'", key="primary_patient_chat_input_field"):
+            if prompt := st.chat_input("Enter symptoms or ask 'Do you know Malaria?'"):
                 st.session_state.messages.append({"role": "user", "content": prompt})
                 query_lower = prompt.lower().strip()
                 bot = st.session_state.bot
@@ -959,8 +964,10 @@ def main():
                 if query_lower == "verify now":
                     with st.spinner("⚙️ Running verification & training pipeline..."):
                         success, msg = bot.execute_verification_cycle()
-                    if success: st.success(msg)
-                    else: st.warning(msg)
+                    if success:
+                        st.success(msg)
+                    else:
+                        st.warning(msg)
                     response_text = f"System Notification: {msg}"
 
                 elif query_lower.startswith("do you know "):
@@ -968,8 +975,10 @@ def main():
                     if disease_request:
                         if bot.log_learning_request(disease_request):
                             response_text = f"📝 **Request Logged:** Added **{disease_request}** to verification queue.\n\nType **'verify now'** to initialize background pipeline execution."
-                        else: response_text = "❌ Fallback logging path error."
-                    else: response_text = "Please specify a disease structure parameter."
+                        else:
+                            response_text = "❌ Fallback logging path error."
+                    else:
+                        response_text = "Please specify a disease structure parameter."
 
                 else:
                     search_term = DISEASE_ALIASES.get(query_lower, query_lower)
@@ -999,7 +1008,8 @@ def main():
                         response_text += f"\n\n---\n**🛡️ Recommended Advice** *(Source: {source})*:\n"
                         if advice:
                             for item in advice: response_text += f"- {item}\n"
-                        else: response_text += "- No direct online precaution matrix available."
+                        else:
+                            response_text += "- No direct online precaution matrix available."
 
                 st.session_state.messages.append({"role": "assistant", "content": response_text})
                 st.rerun()
