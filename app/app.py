@@ -560,21 +560,13 @@ class MedicalAI:
         return False, "Verification complete. No new distinct components found."
 
     def predict(self, user_input):
-        """
-        🟢 RESTORED HIGH-ACCURACY MULTI-SPLIT TOKENIZER MATRIX:
-        Splits input tokens securely using structural regular expression rules across both
-        commas and clinical conversational conjunction fillers ('and'). Prevents compound symptom strings
-        from dropping below similarity validation margins.
-        """
         if self.model is None or self.le is None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
 
-        # Pre-clean conversational grammar fillers out of syntax pool
-        cleaned = re.sub(r'\b(I have|feeling|my|is)\b', '', user_input, flags=re.IGNORECASE)
-
-        # Split tokens dynamically matching commas OR the absolute boundary word 'and'
-        raw_tokens = re.split(r',|\band\b', cleaned, flags=re.IGNORECASE)
-        tokens = [t.strip().replace(" ", "_").lower() for t in raw_tokens if t.strip()]
+        cleaned = re.sub(r'\b(and|or|I have|feeling|my|is)\b', '', user_input, flags=re.IGNORECASE)
+        tokens = [s.strip().replace(" ", "_").lower() for s in cleaned.split(",")]
+        if len(tokens) == 1 and " " in user_input.strip():
+            tokens = [s.strip().replace(" ", "_").lower() for s in user_input.split(" ")]
 
         input_dict = {col: 0 for col in self.known_symptoms}
         matched = []
@@ -623,6 +615,11 @@ def process_extraction_result(ocr_text, db_lookup):
 
 
 def embed_hospital_finder():
+    """
+    🟢 SOLID ST.COMPONENTS.V1.HTML ENCAPSULATION PATHWAY:
+    Natively parses raw document text blocks down onto an isolated rendering matrix.
+    Resolves layout syntax collisions while passing native GPS data stream contexts cleanly.
+    """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if not os.path.exists(html_path):
         html_path = os.path.join(CURRENT_SCRIPT_DIR, "static", "hospital_finder.html")
@@ -632,19 +629,8 @@ def embed_hospital_finder():
             with open(html_path, "r", encoding="utf-8") as f:
                 html_raw_code = f.read()
 
-            b64_html = base64.b64encode(html_raw_code.encode("utf-8")).decode("utf-8")
-            data_uri = f"data:text/html;base64,{b64_html}"
-
-            native_iframe_string = f"""
-            <iframe 
-                src="{data_uri}" 
-                width="100%" 
-                height="540px" 
-                style="border: none; border-radius: 8px;" 
-                allow="geolocation">
-            </iframe>
-            """
-            components.html(native_iframe_string, height=540)
+            # 🟢 FIXED: Swapped out broken attributes to call components.html explicitly
+            components.html(html_raw_code, height=540)
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
@@ -755,8 +741,6 @@ def main():
     else:
         v_id = get_visitor_id()
         room_prefix = "guest_"
-
-    active_room_id = f"{room_prefix}{v_id}"
 
     with st.sidebar:
         st.header("🔐 Secure Vault")
@@ -951,7 +935,9 @@ def main():
 
         st.divider()
         if st.session_state.chat_mode == "doctor_consult":
-            live_chat_stream(active_room_id, view_role="patient", active_v_id=v_id)
+            live_chat_stream(
+                f"doc_{st.session_state.get('patient_selected_doctor_id', 998877)}_patient_{room_prefix}{v_id}",
+                view_role="patient", active_v_id=v_id)
         else:
             for msg in st.session_state.messages:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
