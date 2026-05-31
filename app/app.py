@@ -79,7 +79,8 @@ else:
 
 # File Path Architecture Map
 MODEL_DIR = os.path.join(resolved_root, "models")
-DATA_DIR = os.path.join(resolved_root, "data", "clean", "chat_bot_clean")
+# ALIGNED PATH INTERCEPTOR:
+DATA_DIR = os.path.join(resolved_root, "data", "clean", "disease_and_symptom_clean")
 RAW_DIR = os.path.join(resolved_root, "data", "raw")
 TEMP_DIR = os.path.join(resolved_root, "data", "temp")
 PREPROCESS_SCRIPT = os.path.join(resolved_root, "scripts", "chat_bot_preprocessing.py")
@@ -167,7 +168,6 @@ CRNN_EXCEPTION_PATCH = {
 # ====================================================================
 # 2. REMOTE STORAGE HANDLERS (SUPABASE SECRET INJECTOR)
 # ====================================================================
-# Safe extraction of backend parameters using st.secrets configuration fallback tracks
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://cwwoloupweulprxwibmp.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY",
                               "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN3d29sb3Vwd2V1bHByeHdpYm1wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MDA5NDEsImV4cCI6MjA5NDI3Njk0MX0.ggPfeYBaL7PLiEM8_fYI5fHo48obb5yRum_kR1CORNM")
@@ -578,17 +578,18 @@ class MedicalAI:
                 input_dict[symptom] = 1
                 matched.append(symptom)
 
-        # Step 2: Fallback token loop logic if strings remain unmapped
-        if not matched:
-            cleaned = re.sub(r'\b(and|or|i have|feeling|my|is|at|both|severe|with)\b', '', query_clean,
-                             flags=re.IGNORECASE)
-            tokens = [t.strip() for t in re.split(r'[\s,]+', cleaned) if t.strip()]
+        # Step 2: Fallback regex loop token logic if structural phrase matches missed
+        cleaned_sentence = re.sub(r'\b(and|or|i have|feeling|my|is|at|both|severe|with|high|acute)\b', '', query_clean, flags=re.IGNORECASE)
+        individual_words = [w.strip() for w in re.split(r'[\s,]+', cleaned_sentence) if len(w.strip()) > 2]
 
-            for t in tokens:
-                matches = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.65)
-                if matches:
-                    input_dict[matches[0]] = 1
-                    matched.append(matches[0])
+        for word in individual_words:
+            for symptom in self.known_symptoms:
+                normalized_symptom_col = symptom.replace("_", " ")
+                # Check for direct word boundaries or fuzzy close variations
+                if re.search(r'\b' + re.escape(word) + r'\b', normalized_symptom_col) or difflib.get_close_matches(word, [normalized_symptom_col], cutoff=0.8):
+                    if symptom not in matched:
+                        input_dict[symptom] = 1
+                        matched.append(symptom)
 
         if not matched:
             return None, [], 0.0
@@ -718,8 +719,9 @@ def main():
     if 'doctor_db_id' not in st.session_state: st.session_state.doctor_db_id = 1
     if 'selected_room' not in st.session_state: st.session_state.selected_room = None
     if 'active_patient_email' not in st.session_state: st.session_state.active_patient_email = None
+
     # ====================================================================
-    # 🎯 PASTE THE DEBUG BLOCK RIGHT HERE
+    # 🎯 DIAGNOSTIC ENVIRONMENT PATH LOGGER
     # ====================================================================
     st.sidebar.warning("📁 Server Debug Map")
     st.sidebar.text(f"Resolved Root: {resolved_root}")
@@ -903,7 +905,6 @@ def main():
                 st.session_state.selected_room = None
                 st.rerun()
 
-            # Sub-render box inside secure execution fragments
             live_chat_stream(st.session_state.selected_room, view_role="doctor")
 
             st.divider()
