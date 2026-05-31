@@ -14,6 +14,7 @@ import base64
 import io
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+from threading import Lock
 
 import torch
 import torch.nn as nn
@@ -26,10 +27,13 @@ import pandas as pd
 import joblib
 from tqdm import tqdm
 import streamlit as st
-import streamlit.components.v1 as components  # Securely imports the modern components layout engine
+import streamlit.components.v1 as components
 from rapidfuzz import process, fuzz
 from st_supabase_connection import SupabaseConnection
 from PIL import Image
+
+# Global thread lock for parallel PyTorch tensor execution contexts
+INFERENCE_LOCK = Lock()
 
 # ====================================================================
 # BACKWARD COMPATIBILITY INJECTOR PATCH (SCI-KIT LEARN FIX)
@@ -44,7 +48,8 @@ except ImportError:
     sys.modules['sklearn.utils._estimator_html_repr'] = sys.modules.get('sklearn.utils', None)
 
 CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(CURRENT_SCRIPT_DIR)
+if CURRENT_SCRIPT_DIR not in sys.path:
+    sys.path.append(CURRENT_SCRIPT_DIR)
 
 try:
     from scripts.medical_detector_cnn import MedicalDetectorCNN
@@ -52,13 +57,15 @@ except ImportError:
     MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. PATH CONFIGURATION & LOCAL RECORD LOCATORS
+# 1. FIXED: ROBUST RELATIVE PATH CONFIGURATION ARCHITECTURE
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
+# Dynamically anchor root down to structural validation flags
 if not IS_ONLINE_DEPLOYMENT:
     resolved_root = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System"
 else:
+    # Look upward through directory depths if executed inside deep nested folders
     possible_roots = [
         CURRENT_SCRIPT_DIR,
         os.path.dirname(CURRENT_SCRIPT_DIR),
@@ -66,7 +73,7 @@ else:
     ]
     resolved_root = CURRENT_SCRIPT_DIR
     for root in possible_roots:
-        if os.path.exists(os.path.join(root, "models", "medical_detector.pth")):
+        if os.path.exists(os.path.join(root, "models")) or os.path.exists(os.path.join(root, "data")):
             resolved_root = root
             break
 
@@ -158,17 +165,22 @@ CRNN_EXCEPTION_PATCH = {
 }
 
 # ====================================================================
-# 2. REMOTE STORAGE HANDLERS (SUPABASE INTEGRATION)
+# 2. REMOTE STORAGE HANDLERS (SUPABASE SECRET INJECTOR)
 # ====================================================================
+# Safe extraction of backend parameters using st.secrets configuration fallback tracks
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://cwwoloupweulprxwibmp.supabase.co")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY",
+                              "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN3d29sb3Vwd2V1bHByeHdpYm1wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MDA5NDEsImV4cCI6MjA5NDI3Njk0MX0.ggPfeYBaL7PLiEM8_fYI5fHo48obb5yRum_kR1CORNM")
+
 try:
     conn = st.connection(
         "supabase",
         type=SupabaseConnection,
-        url="https://cwwoloupweulprxwibmp.supabase.co",
-        key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN3d29sb3Vwd2V1bHByeHdpYm1wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MDA5NDEsImV4cCI6MjA5NDI3Njk0MX0.ggPfeYBaL7PLiEM8_fYI5fHo48obb5yRum_kR1CORNM"
+        url=SUPABASE_URL,
+        key=SUPABASE_KEY
     )
 except Exception:
-    pass
+    conn = None
 
 
 def get_visitor_id():
@@ -183,6 +195,7 @@ def generate_permanent_key(email):
 
 
 def save_user_cloud(v_id, email, key):
+    if conn is None: return False
     try:
         conn.table("user_identities").upsert({"visitor_id": v_id, "email": email, "permanent_key": str(key)}).execute()
         return True
@@ -191,6 +204,7 @@ def save_user_cloud(v_id, email, key):
 
 
 def verify_user_cloud(v_id, input_key):
+    if conn is None: return False
     try:
         query = conn.table("user_identities").select("*").eq("permanent_key", str(input_key)).execute()
         if len(query.data) > 0:
@@ -236,7 +250,8 @@ class ResidualBlock(nn.Module):
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(out_channels))
 
-    def forward(self, x): return self.relu(self.bn2(self.conv2(self.relu(self.bn1(self.conv1(x))))) + self.shortcut(x))
+    def forward(self, x):
+        return self.relu(self.bn2(self.conv2(self.relu(self.bn1(self.conv1(x))))) + self.shortcut(x))
 
 
 class MedicalResidualCRNN(nn.Module):
@@ -266,7 +281,7 @@ class MedicalResidualCRNN(nn.Module):
 
 
 # ====================================================================
-# 4. COMPUTER VISION PARSING ENGINE
+# 4. COMPUTER VISION PARSING ENGINE (THREAD SAFED)
 # ====================================================================
 class OCRReaderPipeline:
     def __init__(self):
@@ -290,26 +305,6 @@ class OCRReaderPipeline:
                           torch.load(CRNN_WEIGHTS, map_location=self.device).items()}
             self.text_recognizer.load_state_dict(state_dict, strict=True)
             self.text_recognizer.eval()
-
-    def segment_full_prescription(self, raw_img):
-        orig_h, orig_w = raw_img.shape[:2]
-        _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 3))
-        dilated_mask = cv2.dilate(thresh, horizontal_kernel, iterations=1)
-        contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        line_crops = []
-
-        if len(contours) > 0:
-            contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
-            for ctr in contours:
-                x, y, w, h = cv2.boundingRect(ctr)
-                if w > 35 and h > 8:
-                    pad_y1, pad_y2 = max(0, y - 2), min(orig_h, y + h + 2)
-                    pad_x1, pad_x2 = max(0, x - 5), min(orig_w, x + w + 5)
-                    crop_slice = raw_img[pad_y1:pad_y2, pad_x1:pad_x2].copy()
-                    if crop_slice.size > 0:
-                        line_crops.append(crop_slice)
-        return line_crops if len(line_crops) > 0 else [raw_img]
 
     def recognize_crop(self, crop):
         if self.text_recognizer is None: return "Weights Missing", 0.0
@@ -340,28 +335,30 @@ class OCRReaderPipeline:
         crnn_input = (crnn_input.astype(np.float32) / 255.0 - 0.5) / 0.5
         crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
 
-        with torch.no_grad():
-            h0 = torch.zeros(self.text_recognizer.num_layers * 2, 1, self.text_recognizer.hidden_size,
-                             dtype=torch.float32).to(self.device)
-            logits = self.text_recognizer(crnn_tensor, (h0, h0))
-            probs = torch.exp(logits).squeeze(0)
-            best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
-            path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
-            line_confidence = float(np.mean(path_probs)) * 100
+        # Secured multi-threaded visualization matrix processing via Lock
+        with INFERENCE_LOCK:
+            with torch.no_grad():
+                h0 = torch.zeros(self.text_recognizer.num_layers * 2, 1, self.text_recognizer.hidden_size,
+                                 dtype=torch.float32).to(self.device)
+                logits = self.text_recognizer(crnn_tensor, (h0, h0))
+                probs = torch.exp(logits).squeeze(0)
+                best_path = torch.argmax(logits.squeeze(0), dim=1).cpu().numpy()
+                path_probs = probs[torch.arange(probs.size(0)), best_path].cpu().numpy()
+                line_confidence = float(np.mean(path_probs)) * 100
 
-            decoded_line = self.encoder.decode(best_path).strip()
-            text_lower = decoded_line.lower()
+                decoded_line = self.encoder.decode(best_path).strip()
+                text_lower = decoded_line.lower()
 
-            if text_lower in CRNN_EXCEPTION_PATCH:
-                decoded_line = CRNN_EXCEPTION_PATCH[text_lower]
-            match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
-            if match and match[1] >= 45.0:
-                decoded_line = match[0]
-            return decoded_line, line_confidence
+                if text_lower in CRNN_EXCEPTION_PATCH:
+                    decoded_line = CRNN_EXCEPTION_PATCH[text_lower]
+                match = process.extractOne(decoded_line, self.medical_dictionary, scorer=fuzz.WRatio)
+                if match and match[1] >= 45.0:
+                    decoded_line = match[0]
+                return decoded_line, line_confidence
 
 
 # ====================================================================
-# 5. DIAGNOSTICS & WEB-KNOWLEDGE LEARNING SECTOR
+# 5. DIAGNOSTICS & NLP COGNITIVE SYMPTOM PARSER
 # ====================================================================
 class MedicalAI:
     def __init__(self):
@@ -371,19 +368,23 @@ class MedicalAI:
         self.load_resources()
 
     def load_resources(self):
-        if os.path.exists(MODEL_PATH) and os.path.exists(LE_PATH):
+        if os.path.exists(MODEL_PATH) and os.path.exists(LE_PATH) and os.path.exists(FEAT_PATH):
             try:
                 self.model, self.le = joblib.load(MODEL_PATH), joblib.load(LE_PATH)
-                if os.path.exists(FEAT_PATH):
-                    self.known_symptoms = pd.read_csv(FEAT_PATH, nrows=0).columns.tolist()
+                self.known_symptoms = pd.read_csv(FEAT_PATH, nrows=0).columns.tolist()
                 self.known_diseases = [d.lower() for d in self.le.classes_]
                 if os.path.exists(FULL_DATA_PATH):
                     self.df_full = pd.read_csv(FULL_DATA_PATH)
             except Exception as e:
-                st.warning(f"Soft Initialization Warning during resource load: {e}")
+                st.warning(f"Soft Initialization Failure: {e}")
+                self.load_emergency_backup_vectors()
         else:
-            self.known_symptoms = ["fever", "cough", "headache", "fatigue", "vomiting", "chills", "nausea"]
-            self.known_diseases = ["influenza", "common cold", "malaria"]
+            self.load_emergency_backup_vectors()
+
+    def load_emergency_backup_vectors(self):
+        self.known_symptoms = ["fever", "cough", "headache", "fatigue", "vomiting", "chills", "nausea",
+                               "muscle_weakness"]
+        self.known_diseases = ["influenza", "common cold", "malaria"]
 
     def get_symptoms(self, disease_name):
         if self.df_full is None: return []
@@ -559,33 +560,46 @@ class MedicalAI:
                 return False, f"Pipeline Error during model construction: {e}"
         return False, "Verification complete. No new distinct components found."
 
+    # ====================================================================
+    # FIXED: ROBUST NLP MULTI-WORD COMPONENT HIGHLIGHTING INTERCEPTOR
+    # ====================================================================
     def predict(self, user_input):
         if self.model is None or self.le is None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
 
-        cleaned = re.sub(r'\b(and|or|I have|feeling|my|is)\b', '', user_input, flags=re.IGNORECASE)
-        tokens = [s.strip().replace(" ", "_").lower() for s in cleaned.split(",")]
-        if len(tokens) == 1 and " " in user_input.strip():
-            tokens = [s.strip().replace(" ", "_").lower() for s in user_input.split(" ")]
-
+        query_clean = user_input.lower().strip()
         input_dict = {col: 0 for col in self.known_symptoms}
         matched = []
-        for t in tokens:
-            m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
-            if m:
-                input_dict[m[0]] = 1
-                matched.append(m[0])
-            else:
-                for k in self.known_symptoms:
-                    if t in k.replace("_", " ") or k.replace("_", " ") in t:
-                        input_dict[k] = 1
-                        matched.append(k)
-                        break
 
-        if not matched: return None, [], 0
-        pred_id = self.model.predict(pd.DataFrame([input_dict]))[0]
-        return self.le.inverse_transform([pred_id])[0], list(set(matched)), \
-            self.model.predict_proba(pd.DataFrame([input_dict]))[0][pred_id] * 100
+        # Step 1: Explicit Substring Scanning protects compound words like "high fever"
+        for symptom in self.known_symptoms:
+            normalized_symptom_col = symptom.replace("_", " ")
+            if normalized_symptom_col in query_clean:
+                input_dict[symptom] = 1
+                matched.append(symptom)
+
+        # Step 2: Fallback token loop logic if strings remain unmapped
+        if not matched:
+            cleaned = re.sub(r'\b(and|or|i have|feeling|my|is|at|both|severe|with)\b', '', query_clean,
+                             flags=re.IGNORECASE)
+            tokens = [t.strip() for t in re.split(r'[\s,]+', cleaned) if t.strip()]
+
+            for t in tokens:
+                matches = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.65)
+                if matches:
+                    input_dict[matches[0]] = 1
+                    matched.append(matches[0])
+
+        if not matched:
+            return None, [], 0.0
+
+        # Step 3: Classification Matrix Vector Prediction Passes
+        input_df = pd.DataFrame([input_dict], columns=self.known_symptoms)
+        pred_id = self.model.predict(input_df)[0]
+        confidence = self.model.predict_proba(input_df)[0][pred_id] * 100
+        disease_string = self.le.inverse_transform([pred_id])[0]
+
+        return disease_string, list(set(matched)), confidence
 
 
 # ====================================================================
@@ -615,11 +629,6 @@ def process_extraction_result(ocr_text, db_lookup):
 
 
 def embed_hospital_finder():
-    """
-    🟢 SOLID ST.COMPONENTS.V1.HTML ENCAPSULATION PATHWAY:
-    Natively parses raw document text blocks down onto an isolated rendering matrix.
-    Resolves layout syntax collisions while passing native GPS data stream contexts cleanly.
-    """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if not os.path.exists(html_path):
         html_path = os.path.join(CURRENT_SCRIPT_DIR, "static", "hospital_finder.html")
@@ -628,8 +637,6 @@ def embed_hospital_finder():
         try:
             with open(html_path, "r", encoding="utf-8") as f:
                 html_raw_code = f.read()
-
-            # 🟢 FIXED: Swapped out broken attributes to call components.html explicitly
             components.html(html_raw_code, height=540)
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
@@ -639,6 +646,9 @@ def embed_hospital_finder():
 
 @st.fragment(run_every=5)
 def live_chat_stream(room_id, view_role, active_v_id=None):
+    if conn is None:
+        st.error("Supabase engine disconnected.")
+        return
     try:
         if view_role == "patient":
             status = conn.table("doctor_status").select("last_seen").eq("is_online", True).execute()
@@ -675,23 +685,12 @@ def live_chat_stream(room_id, view_role, active_v_id=None):
                     st.image(b64_data, use_container_width=True)
                 else:
                     st.markdown(f"{prefix}{msg['message_text']}")
-
-        st.write("")
-        if view_role == "doctor":
-            if doc_prompt := st.chat_input("Type professional guidance...", key="doc_msg_input_field"):
-                bg_db_insert(
-                    {"chat_room_id": room_id, "sender_type": "doctor", "sender_id": "doc", "message_text": doc_prompt})
-                st.toast("✉️ Sent!", icon="📤")
-        else:
-            if prompt := st.chat_input("Type message directly to doctor...", key="patient_msg_input_field"):
-                bg_db_insert({"chat_room_id": room_id, "sender_type": "patient", "sender_id": active_v_id,
-                              "message_text": prompt})
-                st.toast("✉️ Sent!", icon="📤")
     except Exception as e:
         st.caption(f"⚡ Connection jitter handled safely... ({e})")
 
 
 def bg_db_insert(payload_dict):
+    if conn is None: return
     try:
         conn.table("doctor_chat_messages").insert(payload_dict).execute()
     except Exception:
@@ -699,6 +698,7 @@ def bg_db_insert(payload_dict):
 
 
 def update_doctor_heartbeat():
+    if conn is None: return
     try:
         conn.table("doctor_status").upsert({"is_online": True, "last_seen": datetime.now().isoformat()},
                                            on_conflict="is_online").execute()
@@ -728,7 +728,6 @@ def main():
                                       "content": "Hello! I am your AI Health Assistant. Describe your symptoms (e.g., 'fever, headache') or ask about a disease."}]
 
     if "last_processed_file_hash" not in st.session_state: st.session_state.last_processed_file_hash = None
-    if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
     if 'camera_active' not in st.session_state: st.session_state.camera_active = False
 
     file_upload = None
@@ -748,8 +747,8 @@ def main():
         st.caption(f"Hardware ID: `{v_id}`")
         st.divider()
         st.subheader("📡 Diagnostic Matrix")
-        st.metric("Weights Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
-        st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
+        st.metric("Model Targets Initialized?", str(st.session_state.bot.model is not None))
+        st.metric("Features Implemented Count?", str(len(st.session_state.bot.known_symptoms)))
         st.divider()
 
         if not st.session_state.auth:
@@ -761,27 +760,29 @@ def main():
                         st.session_state.is_doctor = True
                         st.session_state.auth = True
                         st.session_state.doctor_db_id = 999 if pin.strip() == "998877" else 888
-                        st.session_state.doctor_display_name = "Dr. Xyz" if pin.strip() == "998877" else "Senior Consultant"
+                        st.session_state.doctor_display_name = "Dr. Code" if pin.strip() == "998877" else "Senior Consultant"
                         st.rerun()
-                    try:
-                        doc_check = conn.table("doctor_identities").select("*").eq("secret_pin",
-                                                                                   str(pin).strip()).execute()
-                        is_valid_doctor = len(doc_check.data) > 0
-                    except Exception:
-                        is_valid_doctor = False
 
-                    if is_valid_doctor:
-                        st.session_state.is_doctor = True
-                        st.session_state.auth = True
-                        st.session_state.doctor_db_id = doc_check.data[0]['id']
-                        st.session_state.doctor_display_name = doc_check.data[0]['doctor_name']
-                        st.rerun()
-                    elif verify_user_cloud(v_id, pin):
-                        st.session_state.is_doctor = False
-                        st.session_state.auth = True
-                        st.rerun()
-                    else:
-                        st.error("Invalid security signature.")
+                    if conn is not None:
+                        try:
+                            doc_check = conn.table("doctor_identities").select("*").eq("secret_pin",
+                                                                                       str(pin).strip()).execute()
+                            is_valid_doctor = len(doc_check.data) > 0
+                        except Exception:
+                            is_valid_doctor = False
+
+                        if is_valid_doctor:
+                            st.session_state.is_doctor = True
+                            st.session_state.auth = True
+                            st.session_state.doctor_db_id = doc_check.data[0]['id']
+                            st.session_state.doctor_display_name = doc_check.data[0]['doctor_name']
+                            st.rerun()
+                        elif verify_user_cloud(v_id, pin):
+                            st.session_state.is_doctor = False
+                            st.session_state.auth = True
+                            st.rerun()
+                        else:
+                            st.error("Invalid security signature.")
             with tab_reg:
                 reg_role = st.selectbox("Select Track:",
                                         ["Patient Vault Profile", "Authorized Medical Practitioner Profile"])
@@ -797,7 +798,7 @@ def main():
                     doc_reg_name = st.text_input("Full Name (Include Dr. Prefix)", key="doc_reg_name_field")
                     doc_reg_mail = st.text_input("Institutional Medical Email", key="doc_reg_mail_field")
                     if st.button("Register Record"):
-                        if doc_reg_name.strip() and "@" in doc_reg_mail:
+                        if doc_reg_name.strip() and "@" in doc_reg_mail and conn is not None:
                             compiled_doc_pin = generate_permanent_key(doc_reg_mail)
                             try:
                                 conn.table("doctor_identities").insert(
@@ -806,8 +807,6 @@ def main():
                                 st.success(f"🎉 Passcode: **{compiled_doc_pin}**")
                             except Exception as e:
                                 st.error(f"Transaction Error: {e}")
-                        else:
-                            st.warning("Ensure practitioner names are completed and check email configurations.")
         else:
             if st.session_state.is_doctor:
                 st.success(f"👨‍⚕️ Portal: {st.session_state.doctor_display_name}")
@@ -854,14 +853,9 @@ def main():
                                 {"chat_room_id": resolved_patient_room_id, "sender_type": "patient", "sender_id": v_id,
                                  "message_text": b64_payload},), daemon=True).start()
                         except Exception as e:
-                            st.error(f"Image compression error: {e}")
+                            st.error(f"Image processing error: {e}")
                     else:
                         raw_img = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-                        if camera_photo is not None:
-                            y1, y2 = int(raw_img.shape[0] * 0.38), int(raw_img.shape[0] * 0.62)
-                            x1, x2 = int(raw_img.shape[1] * 0.05), int(raw_img.shape[1] * 0.95)
-                            raw_img = raw_img[y1:y2, x1:x2].copy()
-
                         text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
                         if text_out.strip():
                             scan_payload = f"📋 *[Direct Crop Extraction]:*\n{text_out}"
@@ -871,17 +865,19 @@ def main():
                             st.rerun()
 
     # ====================================================================
-    # INTERCEPTOR VIEW A: DOCTOR INTERACTION PORTAL
+    # INTERCEPTOR VIEW A: CLINICAL INTERACTION CONSULTATION PANEL
     # ====================================================================
     if st.session_state.is_doctor:
         st.title("👨‍⚕️ Medical Professional Consultation Panel")
         current_active_doc_id = st.session_state.get('doctor_db_id', 1)
-        try:
-            rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").like("chat_room_id",
-                                                                                         f"doc_{current_active_doc_id}_%").execute()
-            distinct_rooms = list(set([row['chat_room_id'] for row in rooms_query.data]))
-        except Exception:
-            distinct_rooms = []
+        distinct_rooms = []
+        if conn is not None:
+            try:
+                rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").like("chat_room_id",
+                                                                                             f"doc_{current_active_doc_id}_%").execute()
+                distinct_rooms = list(set([row['chat_room_id'] for row in rooms_query.data]))
+            except Exception:
+                pass
 
         verified_rooms = [r for r in distinct_rooms if "_patient_user_" in r]
         guest_rooms = [r for r in distinct_rooms if "_patient_guest_" in r]
@@ -897,19 +893,34 @@ def main():
             if st.button("⬅️ Back to Directory"):
                 st.session_state.selected_room = None
                 st.rerun()
+
+            # Sub-render box inside secure execution fragments
             live_chat_stream(st.session_state.selected_room, view_role="doctor")
 
+            st.divider()
+            if doc_prompt := st.text_input("Send Guidance Notes:", key="doc_text_input_action_matrix"):
+                if st.button("Transmit Note Package", use_container_width=True):
+                    bg_db_insert(
+                        {"chat_room_id": st.session_state.selected_room, "sender_type": "doctor", "sender_id": "doc",
+                         "message_text": doc_prompt})
+                    st.rerun()
+
     # ====================================================================
-    # INTERCEPTOR VIEW B: PATIENT SYSTEM INTERFACE
+    # INTERCEPTOR VIEW B: PATIENT CLASSIFIER SYSTEMS CHAT INTERFACE
     # ====================================================================
     else:
         st.title("💬 AI Health Assistant")
+        st.error(
+            "⚠️ DISCLAIMER: This tool provides AI-generated health metrics for information purposes only. It does not replace professional emergency triage clinical checks.")
+
         if st.session_state.chat_mode == "ai_assistant":
-            try:
-                docs_fetch = conn.table("doctor_identities").select("id, doctor_name").execute()
-                avail_docs = docs_fetch.data if docs_fetch.data else [{"id": 998877, "doctor_name": "Duty Consultant"}]
-            except:
-                avail_docs = [{"id": 998877, "doctor_name": "Duty Consultant"}]
+            avail_docs = [{"id": 998877, "doctor_name": "Duty Consultant Practitioner"}]
+            if conn is not None:
+                try:
+                    docs_fetch = conn.table("doctor_identities").select("id, doctor_name").execute()
+                    if docs_fetch.data: avail_docs = docs_fetch.data
+                except:
+                    pass
 
             st.subheader("Connect with Clinical Specialist")
             selected_doc_obj = st.selectbox("Choose Attending Practitioner Terminal:", avail_docs,
@@ -919,12 +930,13 @@ def main():
 
             if st.button("🩺 Connect Live to Doctor Channel", use_container_width=True, type="primary"):
                 st.session_state.chat_mode = "doctor_consult"
-                try:
-                    conn.table("doctor_chat_messages").insert(
-                        {"chat_room_id": patient_target_room_id, "sender_type": "patient", "sender_id": v_id,
-                         "message_text": f"🚨 [System Alert]: Live channel initialized."}).execute()
-                except:
-                    pass
+                if conn is not None:
+                    try:
+                        conn.table("doctor_chat_messages").insert(
+                            {"chat_room_id": patient_target_room_id, "sender_type": "patient", "sender_id": v_id,
+                             "message_text": f"🚨 [System Alert]: Live channel initialized."}).execute()
+                    except:
+                        pass
                 st.rerun()
             with st.expander("🚨 EMERGENCY Toolkit: Find Nearest Hospitals"):
                 embed_hospital_finder()
@@ -935,9 +947,16 @@ def main():
 
         st.divider()
         if st.session_state.chat_mode == "doctor_consult":
-            live_chat_stream(
-                f"doc_{st.session_state.get('patient_selected_doctor_id', 998877)}_patient_{room_prefix}{v_id}",
-                view_role="patient", active_v_id=v_id)
+            active_target_room = f"doc_{st.session_state.get('patient_selected_doctor_id', 998877)}_patient_{room_prefix}{v_id}"
+            live_chat_stream(active_target_room, view_role="patient", active_v_id=v_id)
+
+            st.divider()
+            if prompt_direct := st.text_input("Type Message directly to Physician:",
+                                              key="direct_patient_msg_input_field"):
+                if st.button("Send Message Package"):
+                    bg_db_insert({"chat_room_id": active_target_room, "sender_type": "patient", "sender_id": v_id,
+                                  "message_text": prompt_direct})
+                    st.rerun()
         else:
             for msg in st.session_state.messages:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -950,10 +969,6 @@ def main():
                 if query_lower == "verify now":
                     with st.spinner("⚙️ Running verification & training pipeline..."):
                         success, msg = bot.execute_verification_cycle()
-                    if success:
-                        st.success(msg)
-                    else:
-                        st.warning(msg)
                     response_text = f"System Notification: {msg}"
 
                 elif query_lower.startswith("do you know "):
