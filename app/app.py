@@ -462,8 +462,8 @@ def process_extraction_result(ocr_text, db_lookup):
 
 def embed_hospital_finder():
     """
-    🟢 FIXED: Swapped components.html with standard data URI encoding inside
-    st.iframe to bypass the unexpected 'scrolling' parameter loop crash entirely.
+    规避 'scrolling' parameter loop crash，改写为 data URI encoding 的 native st.iframe 模式，
+    并在此处增加 allow="geolocation" 以允许底层浏览器读取 GPS 传感器硬件权限。
     """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if os.path.exists(html_path):
@@ -471,11 +471,11 @@ def embed_hospital_finder():
             with open(html_path, "r", encoding="utf-8") as f:
                 html_code = f.read()
 
-            # Encode code into a safe base64 iframe data source string
             b64_html = base64.b64encode(html_code.encode("utf-8")).decode("utf-8")
             data_uri = f"data:text/html;base64,{b64_html}"
 
-            st.iframe(src=data_uri, height=540)
+            # 🟢 FIXED: 增加了 allow="geolocation" 显式授予浏览器定位能力
+            st.iframe(src=data_uri, height=540, allow="geolocation")
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
