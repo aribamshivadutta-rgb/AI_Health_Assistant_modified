@@ -7,7 +7,16 @@ data/temp/
 # ...BUT keep these specific training/test files
 !data/clean/MedicalCRNN_clean/*.csv
 
+# ==========================================
+# 🎯 ADD THESE ENTRIES TO FIX YOUR APP ONLINE:
+# ==========================================
+!data/clean/disease_and_symptom_clean/X_preprocessed.csv
+!data/clean/disease_and_symptom_clean/label_encoder.pkl
+!data/clean/disease_and_symptom_clean/preprocessed_data.csv
+
 # Ignore the models folder...
-models/
+
 # ...BUT keep your specific trained model
 !models/MedicalCRNN_v2_Residual.pth
+# Also keep your LightGBM model pkl file
+!models/lgbm_model_clean.pkl
