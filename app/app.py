@@ -26,6 +26,7 @@ import pandas as pd
 import joblib
 from tqdm import tqdm
 import streamlit as st
+import streamlit.components.v1 as components  # Securely imports the modern components layout engine
 from rapidfuzz import process, fuzz
 from st_supabase_connection import SupabaseConnection
 from PIL import Image
@@ -615,10 +616,9 @@ def process_extraction_result(ocr_text, db_lookup):
 
 def embed_hospital_finder():
     """
-    🟢 ST.COMPONENTS.HTML PRODUCTION IMPLEMENTATION:
-    Serves raw HTML contents cleanly as an embedded Document origin canvas.
-    Bypasses legacy v1 import deprecation tracks while natively supporting browser
-    hardware GPS telemetry synchronization blocks.
+    🟢 SOLID ST.COMPONENTS.V1.HTML ENCAPSULATION PATHWAY:
+    Natively parses raw document text blocks down onto an isolated rendering matrix.
+    Resolves layout syntax collisions while passing native GPS data stream contexts cleanly.
     """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if not os.path.exists(html_path):
@@ -629,8 +629,8 @@ def embed_hospital_finder():
             with open(html_path, "r", encoding="utf-8") as f:
                 html_raw_code = f.read()
 
-            # 🟢 FIX: Uses standard st.components.html to inject raw code strings seamlessly
-            st.components.html(html_raw_code, height=540)
+            # 🟢 FIXED: Swapped out broken attributes to call components.html explicitly
+            components.html(html_raw_code, height=540)
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
