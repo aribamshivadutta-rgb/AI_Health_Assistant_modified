@@ -24,7 +24,6 @@ import pandas as pd
 import joblib
 from tqdm import tqdm
 import streamlit as st
-import streamlit.components.v1 as components
 from pdf2image import convert_from_bytes
 from rapidfuzz import process, fuzz, distance
 from st_supabase_connection import SupabaseConnection
@@ -184,7 +183,6 @@ def save_user_cloud(v_id, email, key):
 
 def verify_user_cloud(v_id, input_key):
     try:
-        # Cross-reference tracking via unique security pin across user parameters
         query = conn.table("user_identities").select("*").eq("permanent_key", str(input_key)).execute()
         if len(query.data) > 0:
             st.session_state.active_patient_email = query.data[0]['email']
@@ -436,7 +434,7 @@ class MedicalAI:
 
 
 # ====================================================================
-# 6. STREAMLIT APPLICATION LOGIC & DYNAMIC MAP ASSET LOADER
+# 6. STREAMLIT APPLICATION LOGIC & COMPONENT IFRAME INTEGRATION
 # ====================================================================
 def process_extraction_result(ocr_text, db_lookup):
     db_insights = ""
@@ -462,11 +460,22 @@ def process_extraction_result(ocr_text, db_lookup):
 
 
 def embed_hospital_finder():
+    """
+    🟢 FIXED: Uses native st.iframe container specifications instead of the
+    legacy components.html wrapper to prevent runtime deprecation crashes.
+    """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
+
     if os.path.exists(html_path):
-        with open(html_path, "r", encoding="utf-8") as f:
-            html_code = f.read()
-        components.html(html_code, height=540, scrolling=True)
+        try:
+            with open(html_path, "r", encoding="utf-8") as f:
+                html_raw_code = f.read()
+
+            b64_html = base64.b64encode(html_raw_code.encode("utf-8")).decode("utf-8")
+            data_uri = f"data:text/html;base64,{b64_html}"
+            st.iframe(src=data_uri, height=540, scrolling=True)
+        except Exception as err:
+            st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
         st.error("Hospital finder core engine template target execution canvas mapping missing.")
 
@@ -568,6 +577,10 @@ def main():
     if 'chat_mode' not in st.session_state: st.session_state.chat_mode = "ai_assistant"
     if 'is_doctor' not in st.session_state: st.session_state.is_doctor = False
     if 'doctor_display_name' not in st.session_state: st.session_state.doctor_display_name = "Doctor"
+
+    # 👨‍⚕️ NEW: Active relational database primary key sequence storage state
+    if 'doctor_db_id' not in st.session_state: st.session_state.doctor_db_id = 1
+
     if 'selected_room' not in st.session_state: st.session_state.selected_room = None
     if 'active_patient_email' not in st.session_state: st.session_state.active_patient_email = None
 
@@ -586,7 +599,6 @@ def main():
     file_upload = None
     camera_photo = None
 
-    # Determine unique individual identity keys deterministically bound to specific verified emails
     if st.session_state.auth and st.session_state.active_patient_email:
         raw_target_string = str(st.session_state.active_patient_email).strip().lower()
         v_id = hashlib.sha256(raw_target_string.encode()).hexdigest()[:16]
@@ -594,8 +606,6 @@ def main():
     else:
         v_id = get_visitor_id()
         room_prefix = "guest_"
-
-    active_room_id = f"{room_prefix}{v_id}"
 
     with st.sidebar:
         st.header("🔐 Secure Vault")
@@ -613,7 +623,6 @@ def main():
             st.error(f"Crash Log: {st.session_state.get('db_msg', 'Unknown Error')}")
         st.divider()
 
-        # Auth logic
         if not st.session_state.auth:
             st.warning("Locked Mode: Chat only.")
             tab_unlock, tab_reg = st.tabs(["Unlock", "Register"])
@@ -621,9 +630,11 @@ def main():
                 pin = st.text_input("Enter 6-Digit Key", type="password", key="vault_pin")
                 if st.button("Unlock Features"):
                     if pin.strip():
+                        # Hardcoded bypass loops explicitly assign primary key doctor channels
                         if pin.strip() in ["998877", "112233"]:
                             st.session_state.is_doctor = True
                             st.session_state.auth = True
+                            st.session_state.doctor_db_id = 999 if pin.strip() == "998877" else 888
                             st.session_state.doctor_display_name = "Dr. Xyz" if pin.strip() == "998877" else "Senior Consultant"
                             st.success(f"Bypass Authorized! Welcome, {st.session_state.doctor_display_name}.")
                             st.rerun()
@@ -638,6 +649,8 @@ def main():
                         if is_valid_doctor:
                             st.session_state.is_doctor = True
                             st.session_state.auth = True
+                            st.session_state.doctor_db_id = doc_check.data[0][
+                                'id']  # Captures autoincremented index pointer
                             st.session_state.doctor_display_name = doc_check.data[0]['doctor_name']
                             st.success(f"Welcome back, {st.session_state.doctor_display_name}!")
                             st.rerun()
@@ -743,8 +756,12 @@ def main():
                             b64_string = base64.b64encode(mem_buffer.getvalue()).decode("utf-8")
                             b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{b64_string}"
 
+                            # 🟢 AIR-GAPPED FIX: Streams prescription image payload cleanly to targeted doctor channel link
+                            target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
+                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
+
                             upload_data = {
-                                "chat_room_id": active_room_id,
+                                "chat_room_id": resolved_patient_room_id,
                                 "sender_type": "patient",
                                 "sender_id": v_id,
                                 "message_text": b64_payload
@@ -845,17 +862,19 @@ def main():
     if st.session_state.is_doctor:
         st.title("👨‍⚕️ Medical Professional Consultation Panel")
 
+        current_active_doc_id = st.session_state.get('doctor_db_id', 1)
+
         try:
-            rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").execute()
+            # 🟢 AIR-GAPPED FIX: Select rows containing this doctor's explicit ID mapping keys only
+            rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").like("chat_room_id",
+                                                                                         f"doc_{current_active_doc_id}_%").execute()
             distinct_rooms = list(set([row['chat_room_id'] for row in rooms_query.data]))
             users_query = conn.table("user_identities").select("visitor_id, email").execute()
             identity_map = {row['visitor_id']: row['email'] for row in users_query.data}
 
-            # Formulate fallback labels for legacy or guest strings dynamically mapped via sub-queries
             for rm in distinct_rooms:
-                clean_uid = rm.replace("user_", "")
-                if clean_uid not in identity_map and rm.startswith("user_"):
-                    # Fallback mapping configuration matrix path strategy
+                clean_uid = rm.split("_")[-1]
+                if clean_uid not in identity_map and "_patient_" in rm:
                     try:
                         user_db_check = conn.table("user_identities").select("email").eq("visitor_id",
                                                                                          clean_uid).execute()
@@ -866,8 +885,8 @@ def main():
         except Exception:
             distinct_rooms, identity_map = [], {}
 
-        verified_rooms = [r for r in distinct_rooms if r.startswith("user_")]
-        guest_rooms = [r for r in distinct_rooms if r.startswith("guest_")]
+        verified_rooms = [r for r in distinct_rooms if "_patient_user_" in r]
+        guest_rooms = [r for r in distinct_rooms if "_patient_guest_" in r]
 
         if st.session_state.selected_room is None:
             category_tab = st.radio("Select Directory Category",
@@ -875,30 +894,31 @@ def main():
             selected_option = None
             if category_tab == "Verified Registered Patients":
                 if not verified_rooms:
-                    st.info("No active verified consultations.")
+                    st.info("No active assigned verified consultations found.")
                 else:
                     def user_label(r):
-                        uid_key = r.replace('user_', '')
+                        uid_key = r.split("_")[-1]
                         matched_email = identity_map.get(uid_key)
-                        return f"👤 {matched_email if matched_email else 'Verified Key Extraction'} — [...{uid_key[-6:]}]"
+                        return f"👤 {matched_email if matched_email else 'Verified Key Profile Reference'} — [...{uid_key[-6:]}]"
 
-                    selected_option = st.selectbox("Active Verified Channels", verified_rooms, format_func=user_label)
+                    selected_option = st.selectbox("Active Assigned Channels", verified_rooms, format_func=user_label)
             else:
                 if not guest_rooms:
-                    st.info("No active guest sessions.")
+                    st.info("No active assigned guest sessions.")
                 else:
-                    selected_option = st.selectbox("Active Guest Channels", guest_rooms,
-                                                   format_func=lambda r: f"⏳ Guest Session — [...{r[-6:]}]")
+                    selected_option = st.selectbox("Active Assigned Guest Channels", guest_rooms,
+                                                   format_func=lambda r: f"⏳ Anonymous Guest Session — [...{r[-6:]}]")
 
             if st.button("Open Consultation", type="primary"):
-                st.session_state.selected_room = selected_option
-                st.rerun()
+                if selected_option:
+                    st.session_state.selected_room = selected_option
+                    st.rerun()
         else:
             if st.button("⬅️ Back to Directory"):
                 st.session_state.selected_room = None
                 st.rerun()
 
-            st.subheader(f"Consultation with: `{st.session_state.selected_room}`")
+            st.subheader(f"Consultation Channel Matrix Target: `{st.session_state.selected_room}`")
             live_chat_stream(st.session_state.selected_room, view_role="doctor")
 
     # ====================================================================
@@ -907,16 +927,36 @@ def main():
     else:
         st.title("💬 AI Health Assistant")
         if st.session_state.chat_mode == "ai_assistant":
+
+            # Fetch practitioners registry row dataset directly to allow structural targeting
+            try:
+                docs_fetch = conn.table("doctor_identities").select("id, doctor_name").execute()
+                avail_docs = docs_fetch.data if docs_fetch.data else [{"id": 998877, "doctor_name": "Duty Consultant"}]
+            except:
+                avail_docs = [{"id": 998877, "doctor_name": "Duty Consultant"}]
+
+            st.subheader("Connect with Clinical Specialist")
+            selected_doc_obj = st.selectbox(
+                "Choose Attending Practitioner Terminal:",
+                avail_docs,
+                format_func=lambda d: f"👨‍⚕️ {d['doctor_name']} [Registry Reference: ID {d['id']}]"
+            )
+
+            # Save selection to frame memory state
+            st.session_state.patient_selected_doctor_id = selected_doc_obj['id']
+            patient_target_room_id = f"doc_{selected_doc_obj['id']}_patient_{room_prefix}{v_id}"
+
             btn_label = "Live chat Doctor Portal" if st.session_state.auth else "🩺 Connect Live to Doctor (As Guest Client)"
             if st.button(btn_label, use_container_width=True, type="primary"):
                 st.session_state.chat_mode = "doctor_consult"
                 try:
                     conn.table("doctor_chat_messages").insert(
-                        {"chat_room_id": active_room_id, "sender_type": "patient", "sender_id": v_id,
-                         "message_text": f"🚨 [System Alert]: Room initiated."}).execute()
+                        {"chat_room_id": patient_target_room_id, "sender_type": "patient", "sender_id": v_id,
+                         "message_text": f"🚨 [System Alert]: Navigation room channel session initialized."}).execute()
                 except:
                     pass
                 st.rerun()
+
             with st.expander("🚨 EMERGENCY Toolkit: Find Nearest Hospitals", expanded=False):
                 embed_hospital_finder()
         else:
@@ -928,7 +968,10 @@ def main():
 
         st.divider()
         if st.session_state.chat_mode == "doctor_consult":
-            live_chat_stream(active_room_id, view_role="patient", active_v_id=v_id)
+            active_target_doc = st.session_state.get('patient_selected_doctor_id', 998877)
+            resolved_session_room_id = f"doc_{active_target_doc}_patient_{room_prefix}{v_id}"
+
+            live_chat_stream(resolved_session_room_id, view_role="patient", active_v_id=v_id)
         else:
             for msg in st.session_state.messages:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
