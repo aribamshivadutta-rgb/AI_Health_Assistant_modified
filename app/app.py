@@ -559,6 +559,7 @@ class MedicalAI:
         return False, "Verification complete. No new distinct components found."
 
     def predict(self, user_input):
+        # 🟢 SYNTAX FIX: Closed syntax checks cleanly via 'is None' operator checks
         if self.model is None or self.le is None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
 
@@ -615,17 +616,21 @@ def process_extraction_result(ocr_text, db_lookup):
 
 def embed_hospital_finder():
     """
-    🟢 FIXED: Swapped parameters to use st.iframe(html=...) explicitly.
-    This resolves browser hardware permission policies and loads the map smoothly.
+    🟢 SOLID BASE64 DATA EMBEDDING PATHWAY:
+    Dynamically loads code into a data URI. No 'static' folders or directory
+    mappings are required on Windows or Linux targets.
     """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
+    if not os.path.exists(html_path):
+        html_path = os.path.join(CURRENT_SCRIPT_DIR, "static", "hospital_finder.html")
+
     if os.path.exists(html_path):
         try:
             with open(html_path, "r", encoding="utf-8") as f:
-                html_raw_content = f.read()
-
-            # Passing raw string data to the html keyword directly preserves browser context permissions
-            st.iframe(html=html_raw_content, height=540)
+                html_raw_code = f.read()
+            b64_html = base64.b64encode(html_raw_code.encode("utf-8")).decode("utf-8")
+            data_uri = f"data:text/html;base64,{b64_html}"
+            st.iframe(src=data_uri, height=540)
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
