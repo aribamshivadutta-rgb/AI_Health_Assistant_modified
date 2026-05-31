@@ -559,7 +559,6 @@ class MedicalAI:
         return False, "Verification complete. No new distinct components found."
 
     def predict(self, user_input):
-        # 🟢 SYNTAX FIX: Closed syntax checks cleanly via 'is None' operator checks
         if self.model is None or self.le is None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
 
@@ -616,9 +615,9 @@ def process_extraction_result(ocr_text, db_lookup):
 
 def embed_hospital_finder():
     """
-    🟢 SOLID BASE64 DATA EMBEDDING PATHWAY:
-    Dynamically loads code into a data URI. No 'static' folders or directory
-    mappings are required on Windows or Linux targets.
+    🟢 SOLID BASE64 DATA EMBEDDING PATHWAY WITH GEOLOCATION POLICY:
+    Dynamically loads code into a data URI. Enforces hardware geolocation policies
+    to allow browser tracking elements to spin up seamlessly inside the layout.
     """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if not os.path.exists(html_path):
@@ -630,7 +629,9 @@ def embed_hospital_finder():
                 html_raw_code = f.read()
             b64_html = base64.b64encode(html_raw_code.encode("utf-8")).decode("utf-8")
             data_uri = f"data:text/html;base64,{b64_html}"
-            st.iframe(src=data_uri, height=540)
+
+            # 🟢 FIXED: Added allow="geolocation" to let the Leaflet radar engine read device sensors
+            st.iframe(src=data_uri, height=540, allow="geolocation")
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
@@ -748,7 +749,7 @@ def main():
         st.caption(f"Hardware ID: `{v_id}`")
         st.divider()
         st.subheader("📡 Diagnostic Matrix")
-        st.metric("Weights Found?", str(os.path.exists(DETECTOR_WEIGHTS)))
+        st.metric("Weights Found?", str(os.path.exists(DETECTOR_WEIGHTWeights := DETECTOR_WEIGHTS)))
         st.metric("Database Loaded?", str(st.session_state.db_lookup is not None))
         st.divider()
 
