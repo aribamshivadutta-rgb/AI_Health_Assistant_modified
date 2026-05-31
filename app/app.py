@@ -718,6 +718,15 @@ def main():
     if 'doctor_db_id' not in st.session_state: st.session_state.doctor_db_id = 1
     if 'selected_room' not in st.session_state: st.session_state.selected_room = None
     if 'active_patient_email' not in st.session_state: st.session_state.active_patient_email = None
+    # ====================================================================
+    # 🎯 PASTE THE DEBUG BLOCK RIGHT HERE
+    # ====================================================================
+    st.sidebar.warning("📁 Server Debug Map")
+    st.sidebar.text(f"Resolved Root: {resolved_root}")
+    st.sidebar.text(f"Looking for model at: {MODEL_PATH}")
+    st.sidebar.text(f"Model File Exists?: {os.path.exists(MODEL_PATH)}")
+    st.sidebar.text(f"Features File Exists?: {os.path.exists(FEAT_PATH)}")
+    # ====================================================================
 
     if 'db_lookup' not in st.session_state:
         db_data, db_msg = load_medicine_database(DB_PATH)
