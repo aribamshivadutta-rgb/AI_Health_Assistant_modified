@@ -571,7 +571,7 @@ class MedicalAI:
         input_dict = {col: 0 for col in self.known_symptoms}
         matched = []
         for t in tokens:
-            m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.6)
+            m = difflib.get_close_matches(t, self.known_symptoms, n=1, cutoff=0.55)
             if m:
                 input_dict[m[0]] = 1
                 matched.append(m[0])
@@ -615,11 +615,6 @@ def process_extraction_result(ocr_text, db_lookup):
 
 
 def embed_hospital_finder():
-    """
-    🟢 SOLID ST.COMPONENTS.V1.HTML ENCAPSULATION PATHWAY:
-    Natively parses raw document text blocks down onto an isolated rendering matrix.
-    Resolves layout syntax collisions while passing native GPS data stream contexts cleanly.
-    """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if not os.path.exists(html_path):
         html_path = os.path.join(CURRENT_SCRIPT_DIR, "static", "hospital_finder.html")
@@ -629,8 +624,19 @@ def embed_hospital_finder():
             with open(html_path, "r", encoding="utf-8") as f:
                 html_raw_code = f.read()
 
-            # 🟢 FIXED: Swapped out broken attributes to call components.html explicitly
-            components.html(html_raw_code, height=540)
+            b64_html = base64.b64encode(html_raw_code.encode("utf-8")).decode("utf-8")
+            data_uri = f"data:text/html;base64,{b64_html}"
+
+            native_iframe_string = f"""
+            <iframe 
+                src="{data_uri}" 
+                width="100%" 
+                height="540px" 
+                style="border: none; border-radius: 8px;" 
+                allow="geolocation">
+            </iframe>
+            """
+            components.html(native_iframe_string, height=540)
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
@@ -742,6 +748,8 @@ def main():
         v_id = get_visitor_id()
         room_prefix = "guest_"
 
+    active_room_id = f"{room_prefix}{v_id}"
+
     with st.sidebar:
         st.header("🔐 Secure Vault")
         if st.session_state.is_doctor: update_doctor_heartbeat()
@@ -817,7 +825,7 @@ def main():
                     st.session_state.selected_room = None
                     st.rerun()
             else:
-                st.success(f"✅ Access Active")
+                st.success(f"Access Active")
                 if st.button("Logout"):
                     st.session_state.auth = False
                     st.session_state.active_patient_email = None
@@ -935,14 +943,15 @@ def main():
 
         st.divider()
         if st.session_state.chat_mode == "doctor_consult":
-            live_chat_stream(
-                f"doc_{st.session_state.get('patient_selected_doctor_id', 998877)}_patient_{room_prefix}{v_id}",
-                view_role="patient", active_v_id=v_id)
+            live_chat_stream(active_room_id, view_role="patient", active_v_id=v_id)
         else:
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]): st.markdown(msg["content"])
+            # 🟢 FIXED: Re-allocated the primary chat list identifier to use explicit keys
+            # effectively decoupling predictions from background asynchronous fragment callbacks.
+            for idx, msg in enumerate(st.session_state.messages):
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
 
-            if prompt := st.chat_input("Enter symptoms or ask 'Do you know Malaria?'"):
+            if prompt := st.chat_input("Enter symptoms or ask 'Do you know Malaria?'", key="primary_patient_chat_input_field"):
                 st.session_state.messages.append({"role": "user", "content": prompt})
                 query_lower = prompt.lower().strip()
                 bot = st.session_state.bot
@@ -950,10 +959,8 @@ def main():
                 if query_lower == "verify now":
                     with st.spinner("⚙️ Running verification & training pipeline..."):
                         success, msg = bot.execute_verification_cycle()
-                    if success:
-                        st.success(msg)
-                    else:
-                        st.warning(msg)
+                    if success: st.success(msg)
+                    else: st.warning(msg)
                     response_text = f"System Notification: {msg}"
 
                 elif query_lower.startswith("do you know "):
@@ -961,10 +968,8 @@ def main():
                     if disease_request:
                         if bot.log_learning_request(disease_request):
                             response_text = f"📝 **Request Logged:** Added **{disease_request}** to verification queue.\n\nType **'verify now'** to initialize background pipeline execution."
-                        else:
-                            response_text = "❌ Fallback logging path error."
-                    else:
-                        response_text = "Please specify a disease structure parameter."
+                        else: response_text = "❌ Fallback logging path error."
+                    else: response_text = "Please specify a disease structure parameter."
 
                 else:
                     search_term = DISEASE_ALIASES.get(query_lower, query_lower)
@@ -994,8 +999,7 @@ def main():
                         response_text += f"\n\n---\n**🛡️ Recommended Advice** *(Source: {source})*:\n"
                         if advice:
                             for item in advice: response_text += f"- {item}\n"
-                        else:
-                            response_text += "- No direct online precaution matrix available."
+                        else: response_text += "- No direct online precaution matrix available."
 
                 st.session_state.messages.append({"role": "assistant", "content": response_text})
                 st.rerun()
