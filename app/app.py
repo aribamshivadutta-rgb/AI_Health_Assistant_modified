@@ -34,6 +34,7 @@ from PIL import Image
 # BACKWARD COMPATIBILITY INJECTOR PATCH (SCI-KIT LEARN FIX)
 # ====================================================================
 import sklearn
+
 if not hasattr(sklearn, '__version__'):
     sklearn.__version__ = "1.4.2"
 try:
@@ -50,7 +51,7 @@ except ImportError:
     MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. FIXED SELF-CORRECTING PATH MATRIX & DATABASE UTILS
+# 1. PATH CONFIGURATION & LOCAL RECORD LOCATORS
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
@@ -68,7 +69,7 @@ else:
             resolved_root = root
             break
 
-# Centralized Path Infrastructure
+# File Path Architecture Map
 MODEL_DIR = os.path.join(resolved_root, "models")
 DATA_DIR = os.path.join(resolved_root, "data", "clean", "chat_bot_clean")
 RAW_DIR = os.path.join(resolved_root, "data", "raw")
@@ -103,6 +104,7 @@ DISEASE_ALIASES = {
     "brain stroke": "cerebrovascular accident"
 }
 
+
 def find_database_dynamically():
     for root_dir, _, files in os.walk(resolved_root):
         for file in files:
@@ -110,7 +112,9 @@ def find_database_dynamically():
                 return os.path.join(root_dir, file)
     return None
 
+
 DB_PATH = find_database_dynamically()
+
 
 def load_medicine_database(db_path):
     if db_path is None or not os.path.exists(db_path):
@@ -128,9 +132,11 @@ def load_medicine_database(db_path):
     except Exception as e:
         return None, f"Processing Error: {str(e)}"
 
+
 def fetch_medicine_details_fast(extracted_name, lookup_dict):
     if not lookup_dict: return None
     return lookup_dict.get(str(extracted_name).strip().lower(), None)
+
 
 MEDICAL_DICTIONARY = [
     "Rx", "Stable", "Tablet", "Capsule", "Amoxicillin", "Paracetamol",
@@ -151,7 +157,7 @@ CRNN_EXCEPTION_PATCH = {
 }
 
 # ====================================================================
-# 2. CLOUD DATABASE MANAGEMENT (SUPABASE INTEGRATION)
+# 2. REMOTE STORAGE HANDLERS (SUPABASE INTEGRATION)
 # ====================================================================
 try:
     conn = st.connection(
@@ -163,14 +169,17 @@ try:
 except Exception:
     pass
 
+
 def get_visitor_id():
     if 'visitor_session_uuid' not in st.session_state:
         st.session_state.visitor_session_uuid = str(uuid.uuid4())[:18]
     return st.session_state.visitor_session_uuid
 
+
 def generate_permanent_key(email):
     random.seed(int(hashlib.sha256(email.strip().lower().encode()).hexdigest(), 16) % 10 ** 8)
     return str(random.randint(100000, 999999))
+
 
 def save_user_cloud(v_id, email, key):
     try:
@@ -178,6 +187,7 @@ def save_user_cloud(v_id, email, key):
         return True
     except Exception:
         return False
+
 
 def verify_user_cloud(v_id, input_key):
     try:
@@ -189,8 +199,9 @@ def verify_user_cloud(v_id, input_key):
     except:
         return False
 
+
 # ====================================================================
-# 3. ARCHITECTURE BLOCK (RESIDUAL CRNN)
+# 3. TEXT PATTERN CODES (RESIDUAL CRNN)
 # ====================================================================
 class MedicalLabelEncoder:
     def __init__(self, json_path):
@@ -209,6 +220,7 @@ class MedicalLabelEncoder:
     def vocab_size(self):
         return len(self.chars) + 1
 
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super(ResidualBlock, self).__init__()
@@ -224,6 +236,7 @@ class ResidualBlock(nn.Module):
                 nn.BatchNorm2d(out_channels))
 
     def forward(self, x): return self.relu(self.bn2(self.conv2(self.relu(self.bn1(self.conv1(x))))) + self.shortcut(x))
+
 
 class MedicalResidualCRNN(nn.Module):
     def __init__(self, vocab_size):
@@ -250,8 +263,9 @@ class MedicalResidualCRNN(nn.Module):
         rnn_out, _ = self.rnn(x.view(b, c * h, w).permute(0, 2, 1), hx)
         return self.fc(rnn_out).log_softmax(2)
 
+
 # ====================================================================
-# 4. SMART HYBRID OCR PIPELINE
+# 4. COMPUTER VISION PARSING ENGINE
 # ====================================================================
 class OCRReaderPipeline:
     def __init__(self):
@@ -344,8 +358,9 @@ class OCRReaderPipeline:
                 decoded_line = match[0]
             return decoded_line, line_confidence
 
+
 # ====================================================================
-# 5. CHATBOT AND CLASSIFICATION EXPERT LAYER (RESTORATION BLOCK)
+# 5. DIAGNOSTICS & WEB-KNOWLEDGE LEARNING SECTOR
 # ====================================================================
 class MedicalAI:
     def __init__(self):
@@ -369,7 +384,6 @@ class MedicalAI:
             self.known_symptoms = ["fever", "cough", "headache", "fatigue", "vomiting", "chills", "nausea"]
             self.known_diseases = ["influenza", "common cold", "malaria"]
 
-    # --- RESTORED SYMPTOMS FROM DISEASE MAPPER ---
     def get_symptoms(self, disease_name):
         if self.df_full is None: return []
         subset = self.df_full[self.df_full['prognosis'].str.lower() == disease_name.lower()]
@@ -378,7 +392,6 @@ class MedicalAI:
         active_symptoms = [col.replace("_", " ") for col in self.known_symptoms if col in row and row[col] == 1]
         return active_symptoms
 
-    # --- RESTORED LOGGING FOR LEARNING QUEUE ---
     def log_learning_request(self, disease_name):
         required_columns = ["timestamp", "source_url", "proposed_disease", "symptoms", "status"]
         if not os.path.exists(REQUESTS_FILE):
@@ -393,7 +406,6 @@ class MedicalAI:
         except:
             return False
 
-    # --- RESTORED ONLINE ADVICE SCRAPER ---
     def scrape_wikipedia(self, disease_name):
         slug = disease_name.strip().replace(" ", "_").title()
         url = f"https://en.wikipedia.org/wiki/{slug}"
@@ -437,7 +449,7 @@ class MedicalAI:
         slug = clean_name.replace(" ", "-")
         try:
             resp = requests.get(f"https://www.who.int/news-room/fact-sheets/detail/{slug}",
-                                 headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                                headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
                 for h in soup.find_all(['h2', 'h3']):
@@ -456,12 +468,13 @@ class MedicalAI:
             if os.path.exists(INFO_DB_PATH):
                 df = pd.read_csv(INFO_DB_PATH)
             else:
-                df = pd.DataFrame(columns=["Disease", "Source", "Precaution_1", "Precaution_2", "Precaution_3", "Precaution_4", "Precaution_5"])
+                df = pd.DataFrame(
+                    columns=["Disease", "Source", "Precaution_1", "Precaution_2", "Precaution_3", "Precaution_4",
+                             "Precaution_5"])
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             df.to_csv(INFO_DB_PATH, index=False)
         return found_text, source
 
-    # --- RESTORED WEB SCRAPING EXTRACTION TARGETS ---
     def verify_and_extract(self, disease_name):
         found_symptoms = []
         searchable_symptoms = [(s.replace("_", " "), s) for s in self.known_symptoms]
@@ -489,7 +502,6 @@ class MedicalAI:
             pass
         return None, None
 
-    # --- FULL EXECUTE RETRAINING PIPELINE ---
     def execute_verification_cycle(self):
         st.info("🧠 Processing pending knowledge structures and retraining parameters...")
         if not os.path.exists(REQUESTS_FILE):
@@ -508,7 +520,8 @@ class MedicalAI:
                 temp_df = pd.read_csv(LEARNED_DATA_FILE)
                 if 'prognosis' in temp_df.columns:
                     existing_diseases = temp_df['prognosis'].str.lower().unique().tolist()
-            except: pass
+            except:
+                pass
 
         for index, row in pending.iterrows():
             d_name = row['proposed_disease']
@@ -545,7 +558,6 @@ class MedicalAI:
                 return False, f"Pipeline Error during model construction: {e}"
         return False, "Verification complete. No new distinct components found."
 
-    # --- RESTORED HIGH-FIDELITY MATCHING CLASSIFIER ---
     def predict(self, user_input):
         if self.model is None or self.le is None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
@@ -574,8 +586,9 @@ class MedicalAI:
         return self.le.inverse_transform([pred_id])[0], list(set(matched)), \
             self.model.predict_proba(pd.DataFrame([input_dict]))[0][pred_id] * 100
 
+
 # ====================================================================
-# 6. STREAMLIT APPLICATION LOGIC & COMPONENT IFRAME INTEGRATION
+# 6. STREAMLIT APPLICATION LOGIC & INTERFACE
 # ====================================================================
 def process_extraction_result(ocr_text, db_lookup):
     db_insights = ""
@@ -599,7 +612,12 @@ def process_extraction_result(ocr_text, db_lookup):
     if db_insights: response += f"\n\n📚 **Database Matches:**\n\n{db_insights}"
     return response
 
+
 def embed_hospital_finder():
+    """
+    🟢 FIXED: Removed the deprecated 'scrolling' parameter to fix the
+    Canvas compilation fault loop crash caused by Streamlit's API updates.
+    """
     html_path = os.path.join(CURRENT_SCRIPT_DIR, "hospital_finder.html")
     if os.path.exists(html_path):
         try:
@@ -607,15 +625,15 @@ def embed_hospital_finder():
                 html_raw_code = f.read()
             b64_html = base64.b64encode(html_raw_code.encode("utf-8")).decode("utf-8")
             data_uri = f"data:text/html;base64,{b64_html}"
-            st.iframe(src=data_uri, height=540, scrolling=True)
+
+            # scrolling parameter securely dropped to comply with modern signature spec
+            st.iframe(src=data_uri, height=540)
         except Exception as err:
             st.error(f"Canvas compilation fault loop triggered: {err}")
     else:
         st.error("Hospital finder core engine template target execution canvas mapping missing.")
 
-# ====================================================================
-# LIVE TELEHEALTH AUTO-POLLING STREAM MATRIX (FOCUS-SAFE)
-# ====================================================================
+
 @st.fragment(run_every=5)
 def live_chat_stream(room_id, view_role, active_v_id=None):
     try:
@@ -628,7 +646,8 @@ def live_chat_stream(room_id, view_role, active_v_id=None):
                 else:
                     st.warning("🔴 Line is currently busy / Doctor offline.")
 
-        chat_query = conn.table("doctor_chat_messages").select("*").eq("chat_room_id", room_id).order("created_at", desc=False).execute()
+        chat_query = conn.table("doctor_chat_messages").select("*").eq("chat_room_id", room_id).order("created_at",
+                                                                                                      desc=False).execute()
 
         for msg in chat_query.data:
             if "[System Alert]" in msg["message_text"]:
@@ -647,7 +666,8 @@ def live_chat_stream(room_id, view_role, active_v_id=None):
             with st.chat_message(role):
                 if msg["message_text"].startswith("[IMAGE_BASE64]"):
                     b64_data = msg["message_text"].replace("[IMAGE_BASE64]", "")
-                    sender_title = "🩺 **Attending Doctor Shared Image:**" if msg["sender_type"] == "doctor" else "👤 **Patient Sent Prescription/Report Image:**"
+                    sender_title = "🩺 **Attending Doctor Shared Image:**" if msg[
+                                                                                 "sender_type"] == "doctor" else "👤 **Patient Sent Prescription/Report Image:**"
                     st.markdown(f"**{sender_title}**")
                     st.image(b64_data, use_container_width=True)
                 else:
@@ -656,26 +676,33 @@ def live_chat_stream(room_id, view_role, active_v_id=None):
         st.write("")
         if view_role == "doctor":
             if doc_prompt := st.chat_input("Type professional guidance...", key="doc_msg_input_field"):
-                bg_db_insert({"chat_room_id": room_id, "sender_type": "doctor", "sender_id": "doc", "message_text": doc_prompt})
+                bg_db_insert(
+                    {"chat_room_id": room_id, "sender_type": "doctor", "sender_id": "doc", "message_text": doc_prompt})
                 st.toast("✉️ Sent!", icon="📤")
         else:
             if prompt := st.chat_input("Type message directly to doctor...", key="patient_msg_input_field"):
-                bg_db_insert({"chat_room_id": room_id, "sender_type": "patient", "sender_id": active_v_id, "message_text": prompt})
+                bg_db_insert({"chat_room_id": room_id, "sender_type": "patient", "sender_id": active_v_id,
+                              "message_text": prompt})
                 st.toast("✉️ Sent!", icon="📤")
     except Exception as e:
-        st.caption(f"⚡ Connection jitter handled safely. Synchronizing framework... ({e})")
+        st.caption(f"⚡ Connection jitter handled safely... ({e})")
+
 
 def bg_db_insert(payload_dict):
-    try: conn.table("doctor_chat_messages").insert(payload_dict).execute()
-    except Exception: pass
+    try:
+        conn.table("doctor_chat_messages").insert(payload_dict).execute()
+    except Exception:
+        pass
+
 
 def update_doctor_heartbeat():
-    try: conn.table("doctor_status").upsert({"is_online": True, "last_seen": datetime.now().isoformat()}, on_conflict="is_online").execute()
-    except: pass
+    try:
+        conn.table("doctor_status").upsert({"is_online": True, "last_seen": datetime.now().isoformat()},
+                                           on_conflict="is_online").execute()
+    except:
+        pass
 
-# ====================================================================
-# RUNTIME MAIN LAYER
-# ====================================================================
+
 def main():
     st.set_page_config(page_title="AI Health Assistant", layout="wide")
 
@@ -694,7 +721,8 @@ def main():
         st.session_state.db_lookup, st.session_state.db_msg = db_data, db_msg
 
     if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": "Hello! I am your AI Health Assistant. Describe your symptoms (e.g., 'fever, headache') or ask about a disease."}]
+        st.session_state.messages = [{"role": "assistant",
+                                      "content": "Hello! I am your AI Health Assistant. Describe your symptoms (e.g., 'fever, headache') or ask about a disease."}]
 
     if "last_processed_file_hash" not in st.session_state: st.session_state.last_processed_file_hash = None
     if "line_diagnostics" not in st.session_state: st.session_state.line_diagnostics = []
@@ -733,9 +761,11 @@ def main():
                         st.session_state.doctor_display_name = "Dr. Xyz" if pin.strip() == "998877" else "Senior Consultant"
                         st.rerun()
                     try:
-                        doc_check = conn.table("doctor_identities").select("*").eq("secret_pin", str(pin).strip()).execute()
+                        doc_check = conn.table("doctor_identities").select("*").eq("secret_pin",
+                                                                                   str(pin).strip()).execute()
                         is_valid_doctor = len(doc_check.data) > 0
-                    except Exception: is_valid_doctor = False
+                    except Exception:
+                        is_valid_doctor = False
 
                     if is_valid_doctor:
                         st.session_state.is_doctor = True
@@ -747,16 +777,19 @@ def main():
                         st.session_state.is_doctor = False
                         st.session_state.auth = True
                         st.rerun()
-                    else: st.error("Invalid security signature.")
+                    else:
+                        st.error("Invalid security signature.")
             with tab_reg:
-                reg_role = st.selectbox("Select Track:", ["Patient Vault Profile", "Authorized Medical Practitioner Profile"])
+                reg_role = st.selectbox("Select Track:",
+                                        ["Patient Vault Profile", "Authorized Medical Practitioner Profile"])
                 if reg_role == "Patient Vault Profile":
                     mail = st.text_input("Email for Key", key="vault_email")
                     if st.button("Generate Key"):
                         if "@" in mail:
                             k = generate_permanent_key(mail)
                             if save_user_cloud(v_id, mail, k): st.success(f"Key: **{k}**")
-                        else: st.error("Invalid Email Structure.")
+                        else:
+                            st.error("Invalid Email Structure.")
                 else:
                     doc_reg_name = st.text_input("Full Name (Include Dr. Prefix)", key="doc_reg_name_field")
                     doc_reg_mail = st.text_input("Institutional Medical Email", key="doc_reg_mail_field")
@@ -764,9 +797,12 @@ def main():
                         if doc_reg_name.strip() and "@" in doc_reg_mail:
                             compiled_doc_pin = generate_permanent_key(doc_reg_mail)
                             try:
-                                conn.table("doctor_identities").insert({"doctor_name": doc_reg_name.strip(), "email": doc_reg_mail.strip(), "secret_pin": str(compiled_doc_pin)}).execute()
+                                conn.table("doctor_identities").insert(
+                                    {"doctor_name": doc_reg_name.strip(), "email": doc_reg_mail.strip(),
+                                     "secret_pin": str(compiled_doc_pin)}).execute()
                                 st.success(f"🎉 Passcode: **{compiled_doc_pin}**")
-                            except Exception as e: st.error(f"Transaction Error: {e}")
+                            except Exception as e:
+                                st.error(f"Transaction Error: {e}")
         else:
             if st.session_state.is_doctor:
                 st.success(f"👨‍⚕️ Portal: {st.session_state.doctor_display_name}")
@@ -809,8 +845,11 @@ def main():
                             b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(mem_buffer.getvalue()).decode('utf-8')}"
                             target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
                             resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
-                            threading.Thread(target=bg_db_insert, args=({"chat_room_id": resolved_patient_room_id, "sender_type": "patient", "sender_id": v_id, "message_text": b64_payload},), daemon=True).start()
-                        except Exception as e: st.error(f"Image compression error: {e}")
+                            threading.Thread(target=bg_db_insert, args=(
+                                {"chat_room_id": resolved_patient_room_id, "sender_type": "patient", "sender_id": v_id,
+                                 "message_text": b64_payload},), daemon=True).start()
+                        except Exception as e:
+                            st.error(f"Image compression error: {e}")
                     else:
                         raw_img = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
                         if camera_photo is not None:
@@ -833,16 +872,19 @@ def main():
         st.title("👨‍⚕️ Medical Professional Consultation Panel")
         current_active_doc_id = st.session_state.get('doctor_db_id', 1)
         try:
-            rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").like("chat_room_id", f"doc_{current_active_doc_id}_%").execute()
+            rooms_query = conn.table("doctor_chat_messages").select("chat_room_id").like("chat_room_id",
+                                                                                         f"doc_{current_active_doc_id}_%").execute()
             distinct_rooms = list(set([row['chat_room_id'] for row in rooms_query.data]))
-        except Exception: distinct_rooms = []
+        except Exception:
+            distinct_rooms = []
 
         verified_rooms = [r for r in distinct_rooms if "_patient_user_" in r]
         guest_rooms = [r for r in distinct_rooms if "_patient_guest_" in r]
 
         if st.session_state.selected_room is None:
             category_tab = st.radio("Directory", ["Registered Patients", "Anonymous Guests"], horizontal=True)
-            selected_option = st.selectbox("Active Channels", verified_rooms if category_tab == "Registered Patients" else guest_rooms)
+            selected_option = st.selectbox("Active Channels",
+                                           verified_rooms if category_tab == "Registered Patients" else guest_rooms)
             if st.button("Open Consultation") and selected_option:
                 st.session_state.selected_room = selected_option
                 st.rerun()
@@ -853,7 +895,7 @@ def main():
             live_chat_stream(st.session_state.selected_room, view_role="doctor")
 
     # ====================================================================
-    # INTERCEPTOR VIEW B: PATIENT SYSTEM INTERFACE WITH DIRECT MATCHRestoration
+    # INTERCEPTOR VIEW B: PATIENT SYSTEM INTERFACE
     # ====================================================================
     else:
         st.title("💬 AI Health Assistant")
@@ -861,17 +903,23 @@ def main():
             try:
                 docs_fetch = conn.table("doctor_identities").select("id, doctor_name").execute()
                 avail_docs = docs_fetch.data if docs_fetch.data else [{"id": 998877, "doctor_name": "Duty Consultant"}]
-            except: avail_docs = [{"id": 998877, "doctor_name": "Duty Consultant"}]
+            except:
+                avail_docs = [{"id": 998877, "doctor_name": "Duty Consultant"}]
 
             st.subheader("Connect with Clinical Specialist")
-            selected_doc_obj = st.selectbox("Choose Attending Practitioner Terminal:", avail_docs, format_func=lambda d: f"👨‍⚕️ {d['doctor_name']}")
+            selected_doc_obj = st.selectbox("Choose Attending Practitioner Terminal:", avail_docs,
+                                            format_func=lambda d: f"👨‍⚕️ {d['doctor_name']}")
             st.session_state.patient_selected_doctor_id = selected_doc_obj['id']
             patient_target_room_id = f"doc_{selected_doc_obj['id']}_patient_{room_prefix}{v_id}"
 
             if st.button("🩺 Connect Live to Doctor Channel", use_container_width=True, type="primary"):
                 st.session_state.chat_mode = "doctor_consult"
-                try: conn.table("doctor_chat_messages").insert({"chat_room_id": patient_target_room_id, "sender_type": "patient", "sender_id": v_id, "message_text": f"🚨 [System Alert]: Live channel initialized."}).execute()
-                except: pass
+                try:
+                    conn.table("doctor_chat_messages").insert(
+                        {"chat_room_id": patient_target_room_id, "sender_type": "patient", "sender_id": v_id,
+                         "message_text": f"🚨 [System Alert]: Live channel initialized."}).execute()
+                except:
+                    pass
                 st.rerun()
             with st.expander("🚨 EMERGENCY Toolkit: Find Nearest Hospitals"):
                 embed_hospital_finder()
@@ -882,7 +930,9 @@ def main():
 
         st.divider()
         if st.session_state.chat_mode == "doctor_consult":
-            live_chat_stream(f"doc_{st.session_state.get('patient_selected_doctor_id', 998877)}_patient_{room_prefix}{v_id}", view_role="patient", active_v_id=v_id)
+            live_chat_stream(
+                f"doc_{st.session_state.get('patient_selected_doctor_id', 998877)}_patient_{room_prefix}{v_id}",
+                view_role="patient", active_v_id=v_id)
         else:
             for msg in st.session_state.messages:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -892,24 +942,28 @@ def main():
                 query_lower = prompt.lower().strip()
                 bot = st.session_state.bot
 
-                # --- 1. ADMIN RETRAINING TRIGGER ---
+                # Retraining command pipeline loop hook
                 if query_lower == "verify now":
                     with st.spinner("⚙️ Running verification & training pipeline..."):
                         success, msg = bot.execute_verification_cycle()
-                    if success: st.success(msg)
-                    else: st.warning(msg)
+                    if success:
+                        st.success(msg)
+                    else:
+                        st.warning(msg)
                     response_text = f"System Notification: {msg}"
 
-                # --- 2. RESTORED DO YOU KNOW LEARNING SECTOR ---
+                # Learning fallback lookup block
                 elif query_lower.startswith("do you know "):
                     disease_request = query_lower[12:].strip("?., ")
                     if disease_request:
                         if bot.log_learning_request(disease_request):
                             response_text = f"📝 **Request Logged:** Added **{disease_request}** to verification queue.\n\nType **'verify now'** to initialize background pipeline execution."
-                        else: response_text = "❌ Fallback logging path error."
-                    else: response_text = "Please specify a disease structure parameter."
+                        else:
+                            response_text = "❌ Fallback logging path error."
+                    else:
+                        response_text = "Please specify a disease structure parameter."
 
-                # --- 3. RESTORED SYMPTOMS MATRIX ENGINE ---
+                # Standard symptom to disease predictive matching layout
                 else:
                     search_term = DISEASE_ALIASES.get(query_lower, query_lower)
                     response_text = ""
@@ -938,10 +992,12 @@ def main():
                         response_text += f"\n\n---\n**🛡️ Recommended Advice** *(Source: {source})*:\n"
                         if advice:
                             for item in advice: response_text += f"- {item}\n"
-                        else: response_text += "- No direct online precaution matrix available."
+                        else:
+                            response_text += "- No direct online precaution matrix available."
 
                 st.session_state.messages.append({"role": "assistant", "content": response_text})
                 st.rerun()
+
 
 if __name__ == "__main__":
     main()
