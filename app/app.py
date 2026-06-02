@@ -32,6 +32,9 @@ from rapidfuzz import process, fuzz
 from st_supabase_connection import SupabaseConnection
 from PIL import Image
 
+# NEW COMPONENT: Interactive client-side canvas cropping layer
+from streamlit_cropper import st_cropper
+
 # Global thread lock for parallel PyTorch tensor execution contexts
 INFERENCE_LOCK = Lock()
 
@@ -57,7 +60,7 @@ except ImportError:
     MedicalDetectorCNN = None
 
 # ====================================================================
-# 1. FIXED: ROBUST RELATIVE PATH CONFIGURATION ARCHITECTURE
+# 1. ROBUST RELATIVE PATH CONFIGURATION ARCHITECTURE
 # ====================================================================
 IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\Users\Bubu")
 
@@ -65,7 +68,6 @@ IS_ONLINE_DEPLOYMENT = os.path.exists("/mount/src") or not os.path.exists(r"C:\U
 if not IS_ONLINE_DEPLOYMENT:
     resolved_root = r"C:\Users\Bubu\AI-Healthcare-Diagnostic-System"
 else:
-    # Look upward through directory depths if executed inside deep nested folders
     possible_roots = [
         CURRENT_SCRIPT_DIR,
         os.path.dirname(CURRENT_SCRIPT_DIR),
@@ -79,7 +81,6 @@ else:
 
 # File Path Architecture Map
 MODEL_DIR = os.path.join(resolved_root, "models")
-# ALIGNED PATH INTERCEPTOR:
 DATA_DIR = os.path.join(resolved_root, "data", "clean", "disease_and_symptom_clean")
 RAW_DIR = os.path.join(resolved_root, "data", "raw")
 TEMP_DIR = os.path.join(resolved_root, "data", "temp")
@@ -281,7 +282,7 @@ class MedicalResidualCRNN(nn.Module):
 
 
 # ====================================================================
-# 4. COMPUTER VISION PARSING ENGINE (THREAD SAFED)
+# 4. COMPUTER VISION PARSING ENGINE (WITH ASPECT-RATIO PAD RESIZING)
 # ====================================================================
 class OCRReaderPipeline:
     def __init__(self):
@@ -310,32 +311,56 @@ class OCRReaderPipeline:
         if self.text_recognizer is None: return "Weights Missing", 0.0
         if crop is None or crop.shape[0] < 4 or crop.shape[1] < 4: return "", 0.0
 
-        cleaned_line = cv2.bilateralFilter(crop, 5, 65, 65)
+        # Run Bilateral background normalization
+        smoothed = cv2.bilateralFilter(crop, 5, 65, 65)
+        _, thresh = cv2.threshold(smoothed, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            all_pts = np.concatenate(contours)
+            x, y, w, h = cv2.boundingRect(all_pts)
+            pad = 4
+            y1 = max(0, y - pad)
+            y2 = min(crop.shape[0], y + h + pad)
+            x1 = max(0, x - pad)
+            x2 = min(crop.shape[1], x + w + pad)
+            cleaned_line = crop[y1:y2, x1:x2]
+        else:
+            cleaned_line = smoothed
+
+        # FIXED FIXED: PROPORTIONAL ASPECT RATIO RESIZER
         target_w, target_h = 256, 64
+        # Create solid canvas backdrop matching background sheet intensity (255 = solid white paper background)
         crnn_input = np.ones((target_h, target_w), dtype=np.uint8) * 255
 
-        scale = target_h / float(cleaned_line.shape[0])
-        nw, nh = int(cleaned_line.shape[1] * scale), target_h
-        if nw > target_w:
-            scale = target_w / float(cleaned_line.shape[1])
-            nw, nh = target_w, int(cleaned_line.shape[0] * scale)
+        # Compute scaling metrics using float factors to avoid int truncations
+        h_orig, w_orig = cleaned_line.shape[:2]
+        scale = min(target_w / w_orig, target_h / h_orig)
 
-        nw, nh = max(4, nw), max(4, nh)
+        # Pull dimensions down smoothly matching the strict limits
+        nw = max(4, int(w_orig * scale))
+        nh = max(4, int(h_orig * scale))
+
         try:
             resized_crop = cv2.resize(cleaned_line, (nw, nh), interpolation=cv2.INTER_CUBIC)
         except:
             return "", 0.0
 
-        start_x = max(0, (target_w - nw) // 2)
-        start_y = max(0, (target_h - nh) // 2)
-        actual_w = min(nw, target_w - start_x)
-        crnn_input[start_y:start_y + nh, start_x:start_x + actual_w] = resized_crop[:, :actual_w]
+        # Center the text perfectly inside the 256x64 canvas grid boxes
+        start_x = (target_w - nw) // 2
+        start_y = (target_h - nh) // 2
+        crnn_input[start_y:start_y + nh, start_x:start_x + nw] = resized_crop
 
+        # Final polarity inversion if ink distribution patterns are dark text strings
         if np.mean(crnn_input) < 127: crnn_input = cv2.bitwise_not(crnn_input)
+
+        # Update real-time monitoring container arrays
+        st.session_state.crnn_debug_image_matrix = crnn_input.copy()
+
+        # Tensor type scaling transitions
         crnn_input = (crnn_input.astype(np.float32) / 255.0 - 0.5) / 0.5
         crnn_tensor = torch.from_numpy(crnn_input).float().to(self.device).unsqueeze(0).unsqueeze(0)
 
-        # Secured multi-threaded visualization matrix processing via Lock
         with INFERENCE_LOCK:
             with torch.no_grad():
                 h0 = torch.zeros(self.text_recognizer.num_layers * 2, 1, self.text_recognizer.hidden_size,
@@ -560,33 +585,30 @@ class MedicalAI:
                 return False, f"Pipeline Error during model construction: {e}"
         return False, "Verification complete. No new distinct components found."
 
-    # ====================================================================
-    # FIXED: ROBUST NLP MULTI-WORD COMPONENT HIGHLIGHTING INTERCEPTOR
-    # ====================================================================
     def predict(self, user_input):
-        if self.model is None or self.le is None:
+        if self.model is None or self.le == None:
             return "Uncompiled Classifier Matrix (Type 'verify now')", [], 0.0
 
         query_clean = user_input.lower().strip()
         input_dict = {col: 0 for col in self.known_symptoms}
         matched = []
 
-        # Step 1: Explicit Substring Scanning protects compound words like "high fever"
         for symptom in self.known_symptoms:
             normalized_symptom_col = symptom.replace("_", " ")
             if normalized_symptom_col in query_clean:
                 input_dict[symptom] = 1
                 matched.append(symptom)
 
-        # Step 2: Fallback regex loop token logic if structural phrase matches missed
-        cleaned_sentence = re.sub(r'\b(and|or|i have|feeling|my|is|at|both|severe|with|high|acute)\b', '', query_clean, flags=re.IGNORECASE)
+        cleaned_sentence = re.sub(r'\b(and|or|i have|feeling|my|is|at|both|severe|with|high|acute)\b', '', query_clean,
+                                  flags=re.IGNORECASE)
         individual_words = [w.strip() for w in re.split(r'[\s,]+', cleaned_sentence) if len(w.strip()) > 2]
 
         for word in individual_words:
             for symptom in self.known_symptoms:
                 normalized_symptom_col = symptom.replace("_", " ")
-                # Check for direct word boundaries or fuzzy close variations
-                if re.search(r'\b' + re.escape(word) + r'\b', normalized_symptom_col) or difflib.get_close_matches(word, [normalized_symptom_col], cutoff=0.8):
+                if re.search(r'\b' + re.escape(word) + r'\b', normalized_symptom_col) or difflib.get_close_matches(word,
+                                                                                                                   [normalized_symptom_col],
+                                                                                                                   cutoff=0.8):
                     if symptom not in matched:
                         input_dict[symptom] = 1
                         matched.append(symptom)
@@ -594,7 +616,6 @@ class MedicalAI:
         if not matched:
             return None, [], 0.0
 
-        # Step 3: Classification Matrix Vector Prediction Passes
         input_df = pd.DataFrame([input_dict], columns=self.known_symptoms)
         pred_id = self.model.predict(input_df)[0]
         confidence = self.model.predict_proba(input_df)[0][pred_id] * 100
@@ -624,7 +645,7 @@ def process_extraction_result(ocr_text, db_lookup):
                            f"* 👉 **Side Effects:** {side_effects}\n" \
                            f"* 👉 **Manufacturer:** {manufacturer}\n\n"
 
-    response = "✅ Medicines extracted securely via Normalized Matrix."
+    response = f"✅ Medicines extracted successfully from auto-aligned selection.\n\nDetected String: `{ocr_text}`"
     if db_insights: response += f"\n\n📚 **Database Matches:**\n\n{db_insights}"
     return response
 
@@ -720,29 +741,12 @@ def main():
     if 'selected_room' not in st.session_state: st.session_state.selected_room = None
     if 'active_patient_email' not in st.session_state: st.session_state.active_patient_email = None
 
-    # ====================================================================
-    # 🎯 DIAGNOSTIC ENVIRONMENT PATH LOGGER
-    # ====================================================================
-    st.sidebar.warning("📁 Server Debug Map")
-    st.sidebar.text(f"Resolved Root: {resolved_root}")
-    st.sidebar.text(f"Looking for model at: {MODEL_PATH}")
-    st.sidebar.text(f"Model File Exists?: {os.path.exists(MODEL_PATH)}")
-    st.sidebar.text(f"Features File Exists?: {os.path.exists(FEAT_PATH)}")
-    # ====================================================================
-
-    if 'db_lookup' not in st.session_state:
-        db_data, db_msg = load_medicine_database(DB_PATH)
-        st.session_state.db_lookup, st.session_state.db_msg = db_data, db_msg
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant",
-                                      "content": "Hello! I am your AI Health Assistant. Describe your symptoms (e.g., 'fever, headache') or ask about a disease."}]
-
-    if "last_processed_file_hash" not in st.session_state: st.session_state.last_processed_file_hash = None
-    if 'camera_active' not in st.session_state: st.session_state.camera_active = False
+    if 'crnn_debug_image_matrix' not in st.session_state:
+        st.session_state.crnn_debug_image_matrix = None
 
     file_upload = None
     camera_photo = None
+    cropped_pil = None
 
     if st.session_state.auth and st.session_state.active_patient_email:
         raw_target_string = str(st.session_state.active_patient_email).strip().lower()
@@ -751,6 +755,144 @@ def main():
     else:
         v_id = get_visitor_id()
         room_prefix = "guest_"
+
+    # ====================================================================
+    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & COGNITIVE INTERACTIVE CROPPER
+    # ====================================================================
+    with st.sidebar:
+        st.warning("📁 Server Debug Map")
+        st.text(f"Resolved Root: {resolved_root}")
+        st.text(f"Looking for model at: {MODEL_PATH}")
+        st.text(f"Model File Exists?: {os.path.exists(MODEL_PATH)}")
+        st.text(f"Features File Exists?: {os.path.exists(FEAT_PATH)}")
+
+        st.divider()
+        st.subheader("👁️ Segmentation Studio")
+        debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
+
+        if st.session_state.auth and not st.session_state.is_doctor:
+            st.divider()
+            st.subheader("📦 Prescription Input Capture")
+            file_upload = st.file_uploader("Upload Prescription Sheet", type=["pdf", "png", "jpg", "jpeg"])
+
+            if 'camera_active' not in st.session_state: st.session_state.camera_active = False
+            if not st.session_state.camera_active:
+                if st.button("📸 Open Live Camera Scanner", use_container_width=True):
+                    st.session_state.camera_active = True
+                    st.rerun()
+            else:
+                if st.button("❌ Close Camera", use_container_width=True):
+                    st.session_state.camera_active = False
+                    st.rerun()
+                camera_photo = st.camera_input("Capture Medicine Image Layer")
+
+            uploaded_file = camera_photo if camera_photo else file_upload
+            if uploaded_file is not None:
+                st.divider()
+                st.caption("🎯 **Interactive Selection Target Bounds**")
+                source_pil = Image.open(uploaded_file).convert("RGB")
+
+                cropped_pil = st_cropper(source_pil, realtime_update=True, box_color='#00FF00', aspect_ratio=None)
+
+                if cropped_pil is not None:
+                    np_arr = np.array(cropped_pil)
+                    file_bytes_io = io.BytesIO()
+                    cropped_pil.save(file_bytes_io, format="PNG")
+                    current_crop_hash = hashlib.md5(file_bytes_io.getvalue()).hexdigest()
+
+                    if st.button("⚡ Process Selection Frame", use_container_width=True, type="primary"):
+                        st.session_state.last_processed_file_hash = current_crop_hash
+
+                        if st.session_state.chat_mode == "doctor_consult":
+                            try:
+                                mem_buffer = io.BytesIO()
+                                cropped_pil.save(mem_buffer, format="JPEG", quality=75)
+                                b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(mem_buffer.getvalue()).decode('utf-8')}"
+                                target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
+                                resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
+                                bg_db_insert({"chat_room_id": resolved_patient_room_id, "sender_type": "patient",
+                                              "sender_id": v_id, "message_text": b64_payload})
+                                st.toast("Shared crop boundary directly with practitioner.", icon="🩺")
+                            except Exception as e:
+                                st.error(f"Image compression failure: {e}")
+                        else:
+                            raw_gray_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2GRAY)
+                            pipeline = st.session_state.ocr_pipeline
+
+                            if debug_segmentation and pipeline.detector is not None:
+                                orig_color_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2BGR)
+                                crop_h, crop_w = raw_gray_crop.shape
+                                input_resized = cv2.resize(raw_gray_crop, (512, 512))
+                                tensor_img = torch.from_numpy(input_resized).float().to(pipeline.device).unsqueeze(
+                                    0).unsqueeze(0) / 255.0
+
+                                with torch.no_grad():
+                                    output_mask = pipeline.detector(tensor_img)
+                                    probs = torch.sigmoid(output_mask).squeeze().cpu().numpy()
+                                    binary_mask = (probs > 0.5).astype(np.uint8) * 255
+                                    binary_mask_resized = cv2.resize(binary_mask, (crop_w, crop_h))
+
+                                visual_mask_overlay = orig_color_crop.copy()
+                                visual_mask_overlay[binary_mask_resized > 0] = [0, 255, 0]
+                                blended_preview = cv2.addWeighted(orig_color_crop, 0.7, visual_mask_overlay, 0.3, 0)
+                                st.image(blended_preview, caption="U-Net Mask (Active Overlay)",
+                                         use_container_width=True)
+
+                            text_out, conf_out = pipeline.recognize_crop(raw_gray_crop)
+                            if text_out.strip():
+                                scan_payload = f"📋 *[Sidebar ROI Extraction Box Target Match]:*"
+                                response = process_extraction_result(text_out, st.session_state.db_lookup)
+                                st.session_state.messages.append({"role": "user", "content": scan_payload})
+                                st.session_state.messages.append({"role": "assistant", "content": response})
+                                st.rerun()
+                            else:
+                                st.warning("Text unrecognized inside frame selection.")
+
+                    # ==========================================================
+                    # 🔍 SELECTION DEBUG DESK PANEL WITH FIXED AUTO-ALIGNMENT
+                    # ==========================================================
+                    st.markdown("---")
+                    st.markdown("### 🔍 Selection Debug Desk")
+
+                    st.caption("📷 **Step 1: Raw Crop Preview** (Check bounds & aspect ratio)")
+                    st.image(cropped_pil, caption="Your literal selection snippet", use_container_width=True)
+
+                    # INTERACTIVE ACTION TRIGGER: Force immediate pipeline push execution on demand
+                    if st.button("🚀 Push Selection Frame", use_container_width=True,
+                                 help="Force processing on what is currently framed above"):
+                        st.session_state.last_processed_file_hash = current_crop_hash
+
+                        raw_gray_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2GRAY)
+                        pipeline = st.session_state.ocr_pipeline
+
+                        text_out, conf_out = pipeline.recognize_crop(raw_gray_crop)
+                        if text_out.strip():
+                            scan_payload = f"📋 *[Forced Pipeline ROI Push Match]:*"
+                            response = process_extraction_result(text_out, st.session_state.db_lookup)
+                            st.session_state.messages.append({"role": "user", "content": scan_payload})
+                            st.session_state.messages.append({"role": "assistant", "content": response})
+                            st.rerun()
+                        else:
+                            st.error("Forced tracking path returned null layout matrices.")
+
+                    if st.session_state.crnn_debug_image_matrix is not None:
+                        st.write("")
+                        st.caption("🎞️ **Step 2: Fixed Aspect-Ratio CRNN Window** ($256 \times 64$)")
+                        st.image(st.session_state.crnn_debug_image_matrix,
+                                 caption="Proportionally scaled, centered, white-padded matrix read by the CRNN model.",
+                                 use_container_width=True)
+                    # ==========================================================
+        st.divider()
+
+    if 'db_lookup' not in st.session_state:
+        db_data, db_msg = load_medicine_database(DB_PATH)
+        st.session_state.db_lookup, st.session_state.db_msg = db_data, db_msg
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = [{"role": "assistant",
+                                      "content": "Hello! I am your AI Health Assistant. Describe your symptoms or upload an image selection snippet."}]
+
+    if "last_processed_file_hash" not in st.session_state: st.session_state.last_processed_file_hash = None
 
     with st.sidebar:
         st.header("🔐 Secure Vault")
@@ -833,48 +975,6 @@ def main():
                     st.session_state.active_patient_email = None
                     st.rerun()
 
-                st.divider()
-                file_upload = st.file_uploader("Upload Patient Report", type=["pdf", "png", "jpg", "jpeg"])
-                if not st.session_state.camera_active:
-                    if st.button("📸 Open Live Camera Scanner", use_container_width=True):
-                        st.session_state.camera_active = True
-                        st.rerun()
-                else:
-                    if st.button("❌ Close Camera", use_container_width=True):
-                        st.session_state.camera_active = False
-                        st.rerun()
-                    camera_photo = st.camera_input("Capture Medicine")
-
-            uploaded_file = camera_photo if camera_photo else file_upload
-            if not st.session_state.is_doctor and uploaded_file is not None:
-                file_bytes = uploaded_file.getvalue()
-                file_hash = hashlib.md5(file_bytes).hexdigest()
-                if st.session_state.last_processed_file_hash != file_hash:
-                    st.session_state.last_processed_file_hash = file_hash
-
-                    if st.session_state.chat_mode == "doctor_consult":
-                        try:
-                            pil_img = Image.open(uploaded_file).convert("RGB")
-                            mem_buffer = io.BytesIO()
-                            pil_img.save(mem_buffer, format="JPEG", quality=60)
-                            b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(mem_buffer.getvalue()).decode('utf-8')}"
-                            target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
-                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
-                            threading.Thread(target=bg_db_insert, args=(
-                                {"chat_room_id": resolved_patient_room_id, "sender_type": "patient", "sender_id": v_id,
-                                 "message_text": b64_payload},), daemon=True).start()
-                        except Exception as e:
-                            st.error(f"Image processing error: {e}")
-                    else:
-                        raw_img = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-                        text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(raw_img)
-                        if text_out.strip():
-                            scan_payload = f"📋 *[Direct Crop Extraction]:*\n{text_out}"
-                            response = process_extraction_result(text_out, st.session_state.db_lookup)
-                            st.session_state.messages.append({"role": "user", "content": scan_payload})
-                            st.session_state.messages.append({"role": "assistant", "content": response})
-                            st.rerun()
-
     # ====================================================================
     # INTERCEPTOR VIEW A: CLINICAL INTERACTION CONSULTATION PANEL
     # ====================================================================
@@ -921,7 +1021,7 @@ def main():
     else:
         st.title("💬 AI Health Assistant")
         st.error(
-            "⚠️ DISCLAIMER: This tool provides AI-generated health metrics for information purposes only. It does not replace professional emergency triage clinical checks.")
+            "⚠️ DISCLAIMER: This tool provides AI-generated health metrics for information purposes only. It does not replace professional emergency triage checks.")
 
         if st.session_state.chat_mode == "ai_assistant":
             avail_docs = [{"id": 998877, "doctor_name": "Duty Consultant Practitioner"}]
@@ -1014,7 +1114,7 @@ def main():
                     if disease_found:
                         symptoms = bot.get_symptoms(disease_found)
                         if symptoms:
-                            response_text += f"\n\n**🩺 Typical Symptoms:**\nCommon indications include: {', '.join(symptoms[:8])}.\n"
+                            response_text += f"\n\n**Private Note Map:** Typical indications include: {', '.join(symptoms[:8])}.\n"
                         advice, source = bot.get_advice(disease_found)
                         response_text += f"\n\n---\n**🛡️ Recommended Advice** *(Source: {source})*:\n"
                         if advice:
