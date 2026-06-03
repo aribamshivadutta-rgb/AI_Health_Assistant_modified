@@ -747,7 +747,7 @@ def main():
         room_prefix = "guest_"
 
     # ====================================================================
-    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & DATA CAPTURE TRACKS
+    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & COGNITIVE INTERACTIVE CROPPER
     # ====================================================================
     with st.sidebar:
         st.warning("📁 Server Debug Map")
@@ -776,10 +776,10 @@ def main():
                 camera_photo = st.camera_input("Capture Medicine Image Layer")
 
             # ==========================================================
-            # 🚀 EXECUTION SPLITTER MATRIX (CAMERA VS DEVICE FILE)
+            # 🚀 CONDITIONAL MATRIX EXECUTION SPLITTER
             # ==========================================================
             if camera_photo is not None:
-                # 🛑 CAMERA TRACK: Push frames directly through without loading Cropper desks
+                # 📷 TRACK 1: CAMERA INPUT (Direct Push path - Bypasses Cropper and U-Net)
                 file_bytes = camera_photo.getvalue()
                 current_cam_hash = hashlib.md5(file_bytes).hexdigest()
 
@@ -789,19 +789,20 @@ def main():
                     if st.session_state.chat_mode == "doctor_consult":
                         try:
                             b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(file_bytes).decode('utf-8')}"
-                            target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
-                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
-                            bg_db_insert({"chat_room_id": resolved_patient_room_id, "sender_type": "patient",
-                                          "sender_id": v_id, "message_text": b64_payload})
-                            st.toast("Dispatched full snapshot layout to practitioner.", icon="🩺")
+                            upload_data = {
+                                "chat_room_id": active_room_id,
+                                "sender_type": "patient",
+                                "sender_id": v_id,
+                                "message_text": b64_payload
+                            }
+                            threading.Thread(target=bg_db_insert, args=(upload_data,), daemon=True).start()
+                            st.toast("Snapshot shared with physician portal terminal.", icon="🩺")
                         except Exception as e:
-                            st.error(f"Image compression loop jitter: {e}")
+                            st.error(f"Image serialization failure: {e}")
                     else:
-                        with st.spinner("Pushing raw frame directly to matching arrays..."):
+                        with st.spinner("Processing camera capture directly to character matrices..."):
                             raw_gray = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8),
                                                     cv2.IMREAD_GRAYSCALE)
-
-                            # Adaptive Contrast Auto-Normalization Matrix
                             processed_gray = cv2.adaptiveThreshold(
                                 raw_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 41, 15
                             )
@@ -814,17 +815,16 @@ def main():
                                 st.session_state.messages.append({"role": "assistant", "content": response})
                                 st.rerun()
                             else:
-                                st.warning("No medical keys detected across snapshot baseline grid dimensions.")
+                                st.warning("No legible medical targets matching parameter constraints discovered.")
 
             elif file_upload is not None:
-                # 📂 DEVICE FILE TRACK: Trigger layout configuration components
+                # 📂 TRACK 2: STATIC DEVICE FILE (Triggers Interactive Cropper & Studio Display)
                 st.divider()
                 st.subheader("👁️ Segmentation Studio")
                 debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
 
                 st.caption("🎯 **Interactive Selection Target Bounds**")
                 source_pil = Image.open(file_upload).convert("RGB")
-
                 cropped_pil = st_cropper(source_pil, realtime_update=True, box_color='#00FF00', aspect_ratio=None)
 
                 if cropped_pil is not None:
@@ -841,10 +841,13 @@ def main():
                                 mem_buffer = io.BytesIO()
                                 cropped_pil.save(mem_buffer, format="JPEG", quality=75)
                                 b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(mem_buffer.getvalue()).decode('utf-8')}"
-                                target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
-                                resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
-                                bg_db_insert({"chat_room_id": resolved_patient_room_id, "sender_type": "patient",
-                                              "sender_id": v_id, "message_text": b64_payload})
+                                upload_data = {
+                                    "chat_room_id": active_room_id,
+                                    "sender_type": "patient",
+                                    "sender_id": v_id,
+                                    "message_text": b64_payload
+                                }
+                                threading.Thread(target=bg_db_insert, args=(upload_data,), daemon=True).start()
                                 st.toast("Shared crop boundary directly with practitioner.", icon="🩺")
                             except Exception as e:
                                 st.error(f"Image compression failure: {e}")
@@ -883,7 +886,7 @@ def main():
 
                     st.markdown("---")
                     st.markdown("### 🔍 Selection Debug Desk")
-                    st.caption("📷 **Step 1: Raw Crop Preview** (Check bounds & aspect ratio)")
+                    st.caption("📷 **Step 1: Raw Crop Preview**")
                     st.image(cropped_pil, caption="Your literal selection snippet", use_container_width=True)
 
                     if st.button("🚀 Push Selection Frame", use_container_width=True):
@@ -900,13 +903,6 @@ def main():
                             st.rerun()
                         else:
                             st.error("Forced tracking path returned null layout matrices.")
-
-                    if st.session_state.crnn_debug_image_matrix is not None:
-                        st.write("")
-                        st.caption("🎞️ **Step 2: Fixed Aspect-Ratio CRNN Window** ($256 \times 64$)")
-                        st.image(st.session_state.crnn_debug_image_matrix,
-                                 caption="Proportionally scaled, centered, white-padded matrix read by the CRNN model.",
-                                 use_container_width=True)
         st.divider()
 
     if 'db_lookup' not in st.session_state:
