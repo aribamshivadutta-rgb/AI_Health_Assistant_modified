@@ -32,9 +32,6 @@ from rapidfuzz import process, fuzz
 from st_supabase_connection import SupabaseConnection
 from PIL import Image
 
-# NEW COMPONENT: Interactive client-side canvas cropping layer
-from streamlit_cropper import st_cropper
-
 # Global thread lock for parallel PyTorch tensor execution contexts
 INFERENCE_LOCK = Lock()
 
@@ -306,6 +303,29 @@ class OCRReaderPipeline:
                           torch.load(CRNN_WEIGHTS, map_location=self.device).items()}
             self.text_recognizer.load_state_dict(state_dict, strict=True)
             self.text_recognizer.eval()
+
+    def segment_full_prescription(self, raw_img):
+        orig_h, orig_w = raw_img.shape[:2]
+
+        _, thresh = cv2.threshold(raw_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (95, 3))
+        dilated_mask = cv2.dilate(thresh, horizontal_kernel, iterations=1)
+
+        contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        line_crops = []
+
+        if len(contours) > 0:
+            contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])
+            for ctr in contours:
+                x, y, w, h = cv2.boundingRect(ctr)
+                if w > 35 and h > 8:
+                    pad_y1, pad_y2 = max(0, y - 2), min(orig_h, y + h + 2)
+                    pad_x1, pad_x2 = max(0, x - 5), min(orig_w, x + w + 5)
+                    crop_slice = raw_img[pad_y1:pad_y2, pad_x1:pad_x2].copy()
+                    if crop_slice.size > 0:
+                        line_crops.append(crop_slice)
+
+        return line_crops if len(line_crops) > 0 else [raw_img]
 
     def recognize_crop(self, crop):
         if self.text_recognizer is None: return "Weights Missing", 0.0
@@ -739,7 +759,6 @@ def main():
 
     file_upload = None
     camera_photo = None
-    cropped_pil = None
 
     if st.session_state.auth and st.session_state.active_patient_email:
         raw_target_string = str(st.session_state.active_patient_email).strip().lower()
@@ -750,7 +769,7 @@ def main():
         room_prefix = "guest_"
 
     # ====================================================================
-    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & COGNITIVE INTERACTIVE CROPPER
+    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & AUTOMATED CROPPER PIPELINE
     # ====================================================================
     with st.sidebar:
         st.warning("📁 Server Debug Map")
@@ -783,101 +802,143 @@ def main():
                 camera_photo = st.camera_input("Capture Medicine Image Layer")
 
             uploaded_file = camera_photo if camera_photo else file_upload
+
             if uploaded_file is not None:
-                st.divider()
-                st.caption("🎯 **Interactive Selection Target Bounds**")
-                source_pil = Image.open(uploaded_file).convert("RGB")
+                file_bytes = uploaded_file.getvalue()
+                file_hash = hashlib.md5(file_bytes).hexdigest()
 
-                cropped_pil = st_cropper(source_pil, realtime_update=True, box_color='#00FF00', aspect_ratio=None)
+                if st.session_state.last_processed_file_hash != file_hash:
+                    st.session_state.last_processed_file_hash = file_hash
 
-                if cropped_pil is not None:
-                    np_arr = np.array(cropped_pil)
-                    file_bytes_io = io.BytesIO()
-                    cropped_pil.save(file_bytes_io, format="PNG")
-                    current_crop_hash = hashlib.md5(file_bytes_io.getvalue()).hexdigest()
+                    if st.session_state.chat_mode == "doctor_consult":
+                        st.toast("📷 Compressing and uploading image in background...", icon="ℹ️")
+                        try:
+                            pil_img = Image.open(uploaded_file)
+                            if pil_img.mode in ("RGBA", "P"):
+                                pil_img = pil_img.convert("RGB")
 
-                    if st.button("⚡ Process Selection Frame", use_container_width=True, type="primary"):
-                        st.session_state.last_processed_file_hash = current_crop_hash
+                            mem_buffer = io.BytesIO()
+                            pil_img.save(mem_buffer, format="JPEG", quality=60)
 
-                        if st.session_state.chat_mode == "doctor_consult":
-                            try:
-                                mem_buffer = io.BytesIO()
-                                cropped_pil.save(mem_buffer, format="JPEG", quality=75)
-                                b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(mem_buffer.getvalue()).decode('utf-8')}"
-                                target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
-                                resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
-                                bg_db_insert({"chat_room_id": resolved_patient_room_id, "sender_type": "patient",
-                                              "sender_id": v_id, "message_text": b64_payload})
-                                st.toast("Shared crop boundary directly with practitioner.", icon="🩺")
-                            except Exception as e:
-                                st.error(f"Image compression failure: {e}")
-                        else:
-                            raw_gray_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2GRAY)
-                            pipeline = st.session_state.ocr_pipeline
+                            b64_string = base64.b64encode(mem_buffer.getvalue()).decode("utf-8")
+                            b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{b64_string}"
 
-                            if debug_segmentation and pipeline.detector is not None:
-                                orig_color_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2BGR)
-                                crop_h, crop_w = raw_gray_crop.shape
-                                input_resized = cv2.resize(raw_gray_crop, (512, 512))
-                                tensor_img = torch.from_numpy(input_resized).float().to(pipeline.device).unsqueeze(
-                                    0).unsqueeze(0) / 255.0
+                            target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
+                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
 
-                                with torch.no_grad():
-                                    output_mask = pipeline.detector(tensor_img)
-                                    probs = torch.sigmoid(output_mask).squeeze().cpu().numpy()
-                                    binary_mask = (probs > 0.5).astype(np.uint8) * 255
-                                    binary_mask_resized = cv2.resize(binary_mask, (crop_w, crop_h))
+                            upload_data = {
+                                "chat_room_id": resolved_patient_room_id,
+                                "sender_type": "patient",
+                                "sender_id": v_id,
+                                "message_text": b64_payload
+                            }
+                            bg_db_insert(upload_data)
+                            st.toast("Shared captured frame directly with practitioner.", icon="🩺")
+                        except Exception as e:
+                            st.error(f"Image compression error: {e}")
+                    else:
+                        raw_img = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
 
-                                visual_mask_overlay = orig_color_crop.copy()
-                                visual_mask_overlay[binary_mask_resized > 0] = [0, 255, 0]
-                                blended_preview = cv2.addWeighted(orig_color_crop, 0.7, visual_mask_overlay, 0.3, 0)
-                                st.image(blended_preview, caption="U-Net Mask (Active Overlay)",
-                                         use_container_width=True)
+                        # --- AUTOMATED CROP & BOUNDS DETECTOR LOGIC FOR CAMERA SAMPLES ---
+                        if camera_photo is not None:
+                            blur_pre = cv2.GaussianBlur(raw_img, (5, 5), 0)
+                            _, thresh_card = cv2.threshold(blur_pre, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            card_contours, _ = cv2.findContours(thresh_card, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                            text_out, conf_out = pipeline.recognize_crop(raw_gray_crop)
-                            if text_out.strip():
-                                scan_payload = f"📋 *[Sidebar ROI Extraction Box Target Match]:*"
-                                response = process_extraction_result(text_out, st.session_state.db_lookup)
-                                st.session_state.messages.append({"role": "user", "content": scan_payload})
-                                st.session_state.messages.append({"role": "assistant", "content": response})
-                                st.rerun()
+                            best_card_box = None
+                            max_card_area = 0
+                            h_img, w_img = raw_img.shape[:2]
+
+                            for cnt in card_contours:
+                                xc, yc, wc, hc = cv2.boundingRect(cnt)
+                                card_area = wc * hc
+                                if wc > (w_img * 0.4) and hc > (h_img * 0.1):
+                                    if card_area > max_card_area:
+                                        max_card_area = card_area
+                                        best_card_box = (xc, yc, wc, hc)
+
+                            if best_card_box is not None:
+                                xc, yc, wc, hc = best_card_box
+                                raw_img = raw_img[yc:yc + hc, xc:xc + wc].copy()
                             else:
-                                st.warning("Text unrecognized inside frame selection.")
+                                y1 = int(h_img * 0.38)
+                                y2 = int(h_img * 0.62)
+                                x1 = int(w_img * 0.05)
+                                x2 = int(w_img * 0.95)
+                                raw_img = raw_img[y1:y2, x1:x2].copy()
 
-                    # ==========================================================
-                    # 🔍 SELECTION DEBUG DESK PANEL WITH FIXED AUTO-ALIGNMENT
-                    # ==========================================================
-                    st.markdown("---")
-                    st.markdown("### 🔍 Selection Debug Desk")
+                        raw_img = cv2.adaptiveThreshold(
+                            raw_img, 255,
+                            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                            cv2.THRESH_BINARY, 41, 15
+                        )
 
-                    st.caption("📷 **Step 1: Raw Crop Preview** (Check bounds & aspect ratio)")
-                    st.image(cropped_pil, caption="Your literal selection snippet", use_container_width=True)
-
-                    # INTERACTIVE ACTION TRIGGER: Force immediate pipeline push execution on demand
-                    if st.button("🚀 Push Selection Frame", use_container_width=True,
-                                 help="Force processing on what is currently framed above"):
-                        st.session_state.last_processed_file_hash = current_crop_hash
-
-                        raw_gray_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2GRAY)
+                        orig_h, orig_w = raw_img.shape[:2]
+                        img_aspect = orig_w / float(orig_h)
                         pipeline = st.session_state.ocr_pipeline
 
-                        text_out, conf_out = pipeline.recognize_crop(raw_gray_crop)
-                        if text_out.strip():
-                            scan_payload = f"📋 *[Forced Pipeline ROI Push Match]:*"
-                            response = process_extraction_result(text_out, st.session_state.db_lookup)
-                            st.session_state.messages.append({"role": "user", "content": scan_payload})
-                            st.session_state.messages.append({"role": "assistant", "content": response})
-                            st.rerun()
+                        # Render U-Net live overlay diagnostics panel if enabled
+                        if debug_segmentation and camera_photo is not None and pipeline.detector is not None:
+                            color_preview_src = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_COLOR)
+                            h_c, w_c = raw_img.shape[:2]
+                            input_resized = cv2.resize(raw_img, (512, 512))
+                            tensor_img = torch.from_numpy(input_resized).float().to(pipeline.device).unsqueeze(0).unsqueeze(0) / 255.0
+
+                            with torch.no_grad():
+                                output_mask = pipeline.detector(tensor_img)
+                                probs = torch.sigmoid(output_mask).squeeze().cpu().numpy()
+                                binary_mask = (probs > 0.5).astype(np.uint8) * 255
+                                binary_mask_resized = cv2.resize(binary_mask, (w_c, h_c))
+
+                            color_crop_src = color_preview_src.copy()
+                            if best_card_box is not None:
+                                xc, yc, wc, hc = best_card_box
+                                color_crop_src = color_crop_src[yc:yc + hc, xc:xc + wc].copy()
+                            else:
+                                h_i, w_i = color_preview_src.shape[:2]
+                                color_crop_src = color_crop_src[int(h_i * 0.38):int(h_i * 0.62), int(w_i * 0.05):int(w_i * 0.95)].copy()
+
+                            visual_mask_overlay = color_crop_src.copy()
+                            visual_mask_overlay[binary_mask_resized > 0] = [0, 255, 0]
+                            blended_preview = cv2.addWeighted(color_crop_src, 0.7, visual_mask_overlay, 0.3, 0)
+                            st.image(blended_preview, caption="U-Net Mask (Active Overlay)", use_container_width=True)
+
+                        if camera_photo is not None or img_aspect > 2.2:
+                            with st.spinner("Processing Isolated Target Card..."):
+                                text_out, conf_out = pipeline.recognize_crop(raw_img)
+                                if text_out.strip():
+                                    scan_payload = f"📋 *[Automated ROI Extraction Target Match]:*"
+                                    response = process_extraction_result(text_out, st.session_state.db_lookup)
+                                    st.session_state.messages.append({"role": "user", "content": scan_payload})
+                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                                    st.rerun()
+                                else:
+                                    st.warning("Text unrecognized inside automated boundaries.")
                         else:
-                            st.error("Forced tracking path returned null layout matrices.")
+                            with st.spinner("Deconstructing Full Page Matrix..."):
+                                extracted_slices = pipeline.segment_full_prescription(raw_img)
+                                all_discovered_text = []
+
+                                for slice_block in extracted_slices:
+                                    text_out, conf_out = pipeline.recognize_crop(slice_block)
+                                    if text_out.strip():
+                                        all_discovered_text.append(text_out)
+
+                                ocr_combined_result = "\n".join(all_discovered_text)
+                                if ocr_combined_result.strip():
+                                    scan_payload = f"📋 *[Full Document Scan Automated Extraction]:*"
+                                    response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
+                                    st.session_state.messages.append({"role": "user", "content": scan_payload})
+                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                                    st.rerun()
+                                else:
+                                    st.error("No valid medical items identified on across page layout structure.")
 
                     if st.session_state.crnn_debug_image_matrix is not None:
-                        st.write("")
-                        st.caption("🎞️ **Step 2: Fixed Aspect-Ratio CRNN Window** ($256 \times 64$)")
-                        st.image(st.session_state.crnn_debug_image_matrix,
-                                 caption="Proportionally scaled, centered, white-padded matrix read by the CRNN model.",
-                                 use_container_width=True)
-                    # ==========================================================
+                        st.markdown("---")
+                        st.markdown("### 🔍 Selection Debug Desk")
+                        st.caption("🎞️ **Aspect-Ratio Padded CRNN Box Window** ($256 \times 64$)")
+                        st.image(st.session_state.crnn_debug_image_matrix, caption="Proportionally normalized white-space backpadded matrix read by model.", use_container_width=True)
         st.divider()
 
     if 'db_lookup' not in st.session_state:
