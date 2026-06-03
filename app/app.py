@@ -78,6 +78,7 @@ else:
             resolved_root = root
             break
 
+# File Path Architecture Map
 MODEL_DIR = os.path.join(resolved_root, "models")
 DATA_DIR = os.path.join(resolved_root, "data", "clean", "disease_and_symptom_clean")
 RAW_DIR = os.path.join(resolved_root, "data", "raw")
@@ -757,8 +758,8 @@ def main():
 
         st.divider()
         st.subheader("👁️ Segmentation Studio")
+        debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
 
-        # Determine source upload channel details cleanly
         if st.session_state.auth and not st.session_state.is_doctor:
             st.divider()
             st.subheader("📦 Prescription Input Capture")
@@ -773,16 +774,12 @@ def main():
                 if st.button("❌ Close Camera", use_container_width=True):
                     st.session_state.camera_active = False
                     st.rerun()
+                st.markdown(
+                    """<style>[data-testid="stCameraInput"] { position: relative; width: 100% !important; } [data-testid="stCameraInput"] video { width: 100% !important; height: auto !important; object-fit: cover !important; } [data-testid="stCameraInput"]:has(video)::before { content: 'ALIGN MEDICINE NAME HERE'; position: absolute; top: 38%; left: 5%; width: 90%; height: 24%; border: 3px dashed #00FF00; color: #00FF00; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; text-align: center; z-index: 99; pointer-events: none; background-color: rgba(0, 255, 0, 0.08); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4); }</style>""",
+                    unsafe_allow_html=True)
                 camera_photo = st.camera_input("Capture Medicine Image Layer")
 
             uploaded_file = camera_photo if camera_photo else file_upload
-
-            # CRITICAL: Isolate U-Net toggle path strictly away from Camera sources
-            if camera_photo is not None:
-                debug_segmentation = False  # Explicitly turned OFF for live phone/webcam snapshots
-            else:
-                debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
-
             if uploaded_file is not None:
                 st.divider()
                 st.caption("🎯 **Interactive Selection Target Bounds**")
@@ -815,8 +812,7 @@ def main():
                             raw_gray_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2GRAY)
                             pipeline = st.session_state.ocr_pipeline
 
-                            # Process Segmentation overlays ONLY if enabled and NOT a camera snapshot
-                            if debug_segmentation and pipeline.detector is not None and camera_photo is None:
+                            if debug_segmentation and pipeline.detector is not None:
                                 orig_color_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2BGR)
                                 crop_h, crop_w = raw_gray_crop.shape
                                 input_resized = cv2.resize(raw_gray_crop, (512, 512))
@@ -851,7 +847,7 @@ def main():
                     st.markdown("---")
                     st.markdown("### 🔍 Selection Debug Desk")
 
-                    st.caption("📷 **Step 1: Raw Crop Preview**")
+                    st.caption("📷 **Step 1: Raw Crop Preview** (Check bounds & aspect ratio)")
                     st.image(cropped_pil, caption="Your literal selection snippet", use_container_width=True)
 
                     if st.button("🚀 Push Selection Frame", use_container_width=True,
