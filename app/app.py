@@ -747,7 +747,7 @@ def main():
         room_prefix = "guest_"
 
     # ====================================================================
-    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & COGNITIVE INTERACTIVE CROPPER
+    # 🎯 SIDEBAR ENVIRONMENT CONSOLE & DATA CAPTURE TRACKS
     # ====================================================================
     with st.sidebar:
         st.warning("📁 Server Debug Map")
@@ -755,10 +755,6 @@ def main():
         st.text(f"Looking for model at: {MODEL_PATH}")
         st.text(f"Model File Exists?: {os.path.exists(MODEL_PATH)}")
         st.text(f"Features File Exists?: {os.path.exists(FEAT_PATH)}")
-
-        st.divider()
-        st.subheader("👁️ Segmentation Studio")
-        debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
 
         if st.session_state.auth and not st.session_state.is_doctor:
             st.divider()
@@ -779,11 +775,55 @@ def main():
                     unsafe_allow_html=True)
                 camera_photo = st.camera_input("Capture Medicine Image Layer")
 
-            uploaded_file = camera_photo if camera_photo else file_upload
-            if uploaded_file is not None:
+            # ==========================================================
+            # 🚀 EXECUTION SPLITTER MATRIX (CAMERA VS DEVICE FILE)
+            # ==========================================================
+            if camera_photo is not None:
+                # 🛑 CAMERA TRACK: Push frames directly through without loading Cropper desks
+                file_bytes = camera_photo.getvalue()
+                current_cam_hash = hashlib.md5(file_bytes).hexdigest()
+
+                if st.session_state.last_processed_file_hash != current_cam_hash:
+                    st.session_state.last_processed_file_hash = current_cam_hash
+
+                    if st.session_state.chat_mode == "doctor_consult":
+                        try:
+                            b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{base64.b64encode(file_bytes).decode('utf-8')}"
+                            target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
+                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
+                            bg_db_insert({"chat_room_id": resolved_patient_room_id, "sender_type": "patient",
+                                          "sender_id": v_id, "message_text": b64_payload})
+                            st.toast("Dispatched full snapshot layout to practitioner.", icon="🩺")
+                        except Exception as e:
+                            st.error(f"Image compression loop jitter: {e}")
+                    else:
+                        with st.spinner("Pushing raw frame directly to matching arrays..."):
+                            raw_gray = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8),
+                                                    cv2.IMREAD_GRAYSCALE)
+
+                            # Adaptive Contrast Auto-Normalization Matrix
+                            processed_gray = cv2.adaptiveThreshold(
+                                raw_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 41, 15
+                            )
+
+                            text_out, conf_out = st.session_state.ocr_pipeline.recognize_crop(processed_gray)
+                            if text_out.strip():
+                                response = process_extraction_result(text_out, st.session_state.db_lookup)
+                                st.session_state.messages.append(
+                                    {"role": "user", "content": "📋 *[Live Camera Snapshot Direct Push]:*"})
+                                st.session_state.messages.append({"role": "assistant", "content": response})
+                                st.rerun()
+                            else:
+                                st.warning("No medical keys detected across snapshot baseline grid dimensions.")
+
+            elif file_upload is not None:
+                # 📂 DEVICE FILE TRACK: Trigger layout configuration components
                 st.divider()
+                st.subheader("👁️ Segmentation Studio")
+                debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
+
                 st.caption("🎯 **Interactive Selection Target Bounds**")
-                source_pil = Image.open(uploaded_file).convert("RGB")
+                source_pil = Image.open(file_upload).convert("RGB")
 
                 cropped_pil = st_cropper(source_pil, realtime_update=True, box_color='#00FF00', aspect_ratio=None)
 
@@ -841,19 +881,13 @@ def main():
                             else:
                                 st.warning("Text unrecognized inside frame selection.")
 
-                    # ==========================================================
-                    # 🔍 SELECTION DEBUG DESK PANEL WITH FIXED AUTO-ALIGNMENT
-                    # ==========================================================
                     st.markdown("---")
                     st.markdown("### 🔍 Selection Debug Desk")
-
                     st.caption("📷 **Step 1: Raw Crop Preview** (Check bounds & aspect ratio)")
                     st.image(cropped_pil, caption="Your literal selection snippet", use_container_width=True)
 
-                    if st.button("🚀 Push Selection Frame", use_container_width=True,
-                                 help="Force processing on what is currently framed above"):
+                    if st.button("🚀 Push Selection Frame", use_container_width=True):
                         st.session_state.last_processed_file_hash = current_crop_hash
-
                         raw_gray_crop = cv2.cvtColor(np_arr, cv2.COLOR_RGB2GRAY)
                         pipeline = st.session_state.ocr_pipeline
 
@@ -873,7 +907,6 @@ def main():
                         st.image(st.session_state.crnn_debug_image_matrix,
                                  caption="Proportionally scaled, centered, white-padded matrix read by the CRNN model.",
                                  use_container_width=True)
-                    # ==========================================================
         st.divider()
 
     if 'db_lookup' not in st.session_state:
