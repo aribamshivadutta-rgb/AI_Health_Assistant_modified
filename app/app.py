@@ -620,7 +620,8 @@ class MedicalAI:
             for symptom in self.known_symptoms:
                 normalized_symptom_col = symptom.replace("_", " ")
                 if re.search(r'\b' + re.escape(word) + r'\b', normalized_symptom_col) or difflib.get_close_matches(word,
-                                                                                                                   [normalized_symptom_col],
+                                                                                                                   [
+                                                                                                                       normalized_symptom_col],
                                                                                                                    cutoff=0.8):
                     if symptom not in matched:
                         input_dict[symptom] = 1
@@ -824,7 +825,9 @@ def main():
                             b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{b64_string}"
 
                             target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
-                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{v_id}"
+
+                            # --- FIXED BLOCK: Injected room_prefix dynamically to stay uniform across active systems ---
+                            resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{room_prefix}{v_id}"
 
                             upload_data = {
                                 "chat_room_id": resolved_patient_room_id,
@@ -879,10 +882,12 @@ def main():
 
                         # Render U-Net live overlay diagnostics panel if enabled
                         if debug_segmentation and camera_photo is not None and pipeline.detector is not None:
-                            color_preview_src = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8), cv2.IMREAD_COLOR)
+                            color_preview_src = cv2.imdecode(np.asarray(bytearray(file_bytes), dtype=np.uint8),
+                                                             cv2.IMREAD_COLOR)
                             h_c, w_c = raw_img.shape[:2]
                             input_resized = cv2.resize(raw_img, (512, 512))
-                            tensor_img = torch.from_numpy(input_resized).float().to(pipeline.device).unsqueeze(0).unsqueeze(0) / 255.0
+                            tensor_img = torch.from_numpy(input_resized).float().to(pipeline.device).unsqueeze(
+                                0).unsqueeze(0) / 255.0
 
                             with torch.no_grad():
                                 output_mask = pipeline.detector(tensor_img)
@@ -896,7 +901,8 @@ def main():
                                 color_crop_src = color_crop_src[yc:yc + hc, xc:xc + wc].copy()
                             else:
                                 h_i, w_i = color_preview_src.shape[:2]
-                                color_crop_src = color_crop_src[int(h_i * 0.38):int(h_i * 0.62), int(w_i * 0.05):int(w_i * 0.95)].copy()
+                                color_crop_src = color_crop_src[
+                                    int(h_i * 0.38):int(h_i * 0.62), int(w_i * 0.05):int(w_i * 0.95)].copy()
 
                             visual_mask_overlay = color_crop_src.copy()
                             visual_mask_overlay[binary_mask_resized > 0] = [0, 255, 0]
@@ -927,7 +933,8 @@ def main():
                                 ocr_combined_result = "\n".join(all_discovered_text)
                                 if ocr_combined_result.strip():
                                     scan_payload = f"📋 *[Full Document Scan Automated Extraction]:*"
-                                    response = process_extraction_result(ocr_combined_result, st.session_state.db_lookup)
+                                    response = process_extraction_result(ocr_combined_result,
+                                                                         st.session_state.db_lookup)
                                     st.session_state.messages.append({"role": "user", "content": scan_payload})
                                     st.session_state.messages.append({"role": "assistant", "content": response})
                                     st.rerun()
@@ -938,7 +945,9 @@ def main():
                         st.markdown("---")
                         st.markdown("### 🔍 Selection Debug Desk")
                         st.caption("🎞️ **Aspect-Ratio Padded CRNN Box Window** ($256 \times 64$)")
-                        st.image(st.session_state.crnn_debug_image_matrix, caption="Proportionally normalized white-space backpadded matrix read by model.", use_container_width=True)
+                        st.image(st.session_state.crnn_debug_image_matrix,
+                                 caption="Proportionally normalized white-space backpadded matrix read by model.",
+                                 use_container_width=True)
         st.divider()
 
     if 'db_lookup' not in st.session_state:
