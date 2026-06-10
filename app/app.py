@@ -773,13 +773,6 @@ def main():
     # 🎯 SIDEBAR ENVIRONMENT CONSOLE & AUTOMATED CROPPER PIPELINE
     # ====================================================================
     with st.sidebar:
-        st.warning("📁 Server Debug Map")
-        st.text(f"Resolved Root: {resolved_root}")
-        st.text(f"Looking for model at: {MODEL_PATH}")
-        st.text(f"Model File Exists?: {os.path.exists(MODEL_PATH)}")
-        st.text(f"Features File Exists?: {os.path.exists(FEAT_PATH)}")
-
-        st.divider()
         st.subheader("👁️ Segmentation Studio")
         debug_segmentation = st.checkbox("Toggle U-Net Live Segmentation Output Map", value=True)
 
@@ -825,8 +818,6 @@ def main():
                             b64_payload = f"[IMAGE_BASE64]data:image/jpeg;base64,{b64_string}"
 
                             target_active_doctor_id = st.session_state.get('patient_selected_doctor_id', 998877)
-
-                            # --- FIXED BLOCK: Injected room_prefix dynamically to stay uniform across active systems ---
                             resolved_patient_room_id = f"doc_{target_active_doctor_id}_patient_{room_prefix}{v_id}"
 
                             upload_data = {
@@ -964,10 +955,6 @@ def main():
         st.header("🔐 Secure Vault")
         if st.session_state.is_doctor: update_doctor_heartbeat()
         st.caption(f"Hardware ID: `{v_id}`")
-        st.divider()
-        st.subheader("📡 Diagnostic Matrix")
-        st.metric("Model Targets Initialized?", str(st.session_state.bot.model is not None))
-        st.metric("Features Implemented Count?", str(len(st.session_state.bot.known_symptoms)))
         st.divider()
 
         if not st.session_state.auth:
