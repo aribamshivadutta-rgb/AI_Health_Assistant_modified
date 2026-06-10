@@ -779,7 +779,7 @@ def main():
         if st.session_state.auth and not st.session_state.is_doctor:
             st.divider()
             st.subheader("📦 Prescription Input Capture")
-            file_upload = st.file_uploader("Upload Prescription Sheet", type=["pdf", "png", "jpg", "jpeg"])
+            file_upload = st.file_uploader("Upload Prescription Sheet", type=[ "png", "jpg", "jpeg"])
 
             if 'camera_active' not in st.session_state: st.session_state.camera_active = False
             if not st.session_state.camera_active:
